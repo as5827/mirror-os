@@ -22,7 +22,8 @@ import urllib.request
 
 PROXY = os.environ.get("MIRROR_PROXY") or ""
 REPO = os.environ.get("MIRROR_REPO", "https://github.com/as5827/mirror-os.git")
-DIR = os.path.join(tempfile.gettempdir(), "mirror_deploycheck")
+# 用 PID 区分，避免上次运行残留（SQLite 文件被占用时 rmtree 会失败）导致下次 clone 报错
+DIR = os.path.join(tempfile.gettempdir(), "mirror_deploycheck_%d" % os.getpid())
 PORT = int(os.environ.get("MIRROR_CHECK_PORT", "8801"))
 BASE = f"http://127.0.0.1:{PORT}"
 
@@ -55,7 +56,19 @@ def http(method, path, body=None):
             return e.code, {}
 
 
-shutil.rmtree(DIR, ignore_errors=True)
+def _rm(path):
+    """删临时目录，删不掉就挪走，不要因为残留挡住下一次运行。"""
+    if not os.path.isdir(path):
+        return
+    shutil.rmtree(path, ignore_errors=True)
+    if os.path.isdir(path):
+        try:
+            os.rename(path, path + "_stale_%d" % int(time.time()))
+        except OSError:
+            pass
+
+
+_rm(DIR)
 print("=== 1. 克隆 ===")
 gitcfg = ["-c", f"http.proxy={PROXY}", "-c", f"https.proxy={PROXY}"] if PROXY else []
 r = subprocess.run(["git"] + gitcfg + ["clone", "-q", REPO, DIR],
@@ -145,5 +158,5 @@ print("\n" + "=" * 58)
 print(f"验收: 通过 {ok_count} 项，失败 {len(bad)} 项")
 for b in bad:
     print("  FAIL:", b)
-shutil.rmtree(DIR, ignore_errors=True)
+_rm(DIR)
 sys.exit(0 if not bad else 1)
