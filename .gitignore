@@ -1,0 +1,52 @@
+# ---------------------------------------------------------------
+# 你的私人数据 —— 一律不进仓库
+# 别人的部署里这些文件由第一次启动自动生成，不随代码分发
+# ---------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# 个人数据（数据库 / 备份 / 运行日志）
+data/
+*.db
+*.db-wal
+*.db-shm
+*.log
+data/backups/
+data/DEMO_MARKER
+
+# 你的个人画像（每个人自己写，不共享）
+persona.txt
+
+# 截图（含你的对话内容、桌面、他人作品壁纸）
+_shots/
+_shots_preview/
+*.png
+!static/icon-*.png
+!mirror.ico
+
+# 图标生成产物里的本地副本
+mirror-app.ico
+mirror.ico
+icon-256.png
+
+# ---------------------------------------------------------------
+# 开发与运行残留
+# ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+node_modules/
+npm-debug.log*
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*~

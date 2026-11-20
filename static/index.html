@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#0e1116">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="镜">
+<title>镜 · 个人决策与复盘系统</title>
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div id="login" class="login" style="display:none">
+  <div style="font-size:28px">◉</div>
+  <div style="font-weight:600;letter-spacing:2px">镜 MIRROR</div>
+  <div class="muted small">输入 PIN 解锁你的数据</div>
+  <input id="pinInput" type="password" inputmode="numeric" placeholder="••••••" autocomplete="current-password">
+  <button class="btn primary" id="pinBtn" style="max-width:240px;width:100%">进入</button>
+  <div class="muted tiny" id="pinErr"></div>
+</div>
+
+<header>
+  <h1><span class="dot"></span>镜 <span class="muted tiny" style="font-weight:400">MIRROR</span></h1>
+  <div class="sp"></div>
+  <span class="ai-tag" id="aiTag">…</span>
+</header>
+
+<nav id="nav">
+  <button data-v="chat" class="on"><span class="ico">◐</span>对话</button>
+  <button data-v="dash"><span class="ico">◎</span>看板</button>
+  <button data-v="events"><span class="ico">✎</span>事件</button>
+  <button data-v="topics"><span class="ico">◈</span>方向</button>
+  <button data-v="decisions"><span class="ico">⑂</span>决策</button>
+  <button data-v="people"><span class="ico">◍</span>人际</button>
+  <button data-v="guard"><span class="ico">⚠</span><span id="navBadge"></span>风控</button>
+</nav>
+
+<main>
+  <!-- ============ 对话 ============ -->
+  <section class="view on" id="v-chat">
+    <div class="row" style="margin-bottom:10px;gap:8px">
+      <button class="btn primary" id="chatNew">+ 新对话</button>
+      <button class="btn" id="chatComfort">共情：自动</button>
+      <button class="btn" id="chatSumm">压缩记忆</button>
+      <button class="btn" id="chatWeb">联网：关</button>
+      <div class="sp"></div>
+      <button class="btn ghost" id="chatSearchBtn">搜旧话</button>
+    </div>
+    <div class="scroll-x" style="margin-bottom:10px"><div class="row" id="convList" style="gap:6px;flex-wrap:nowrap"></div></div>
+    <div class="row wrap" style="gap:6px;margin-bottom:10px" id="skillBar"></div>
+    <div id="chatMsgs" style="min-height:200px"></div>
+    <div class="card" style="position:sticky;bottom:calc(var(--nav-h) + 8px);z-index:30;margin-top:12px">
+      <textarea id="chatInput" placeholder="说点什么…（Ctrl+Enter 发送）" style="min-height:70px"></textarea>
+      <div class="row" style="margin-top:8px">
+        <span class="tiny muted" id="chatHint">记忆与画像会自动带上</span>
+        <div class="sp"></div>
+        <button class="btn primary" id="chatSend">发送</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 看板 ============ -->
+  <section class="view on" id="v-dash">
+    <div class="kpis" id="dashKpis"></div>
+
+    <div class="card">
+      <h3>近 14 天情绪与记录 <span class="sp"></span><span class="tiny muted" id="emoHint"></span></h3>
+      <div id="dashChart"></div>
+    </div>
+
+    <div class="card">
+      <h3>方向聚焦 <span class="sp"></span>
+        <button class="btn sm ghost" onclick="go('topics')">全部 →</button>
+      </h3>
+      <div id="dashFocus"></div>
+    </div>
+
+    <div class="card">
+      <h3>待处置预警 <span class="sp"></span><span class="tiny muted" id="alertCount"></span></h3>
+      <div id="dashAlerts"></div>
+    </div>
+  </section>
+
+  <!-- ============ 事件 ============ -->
+  <section class="view" id="v-events">
+    <div class="row" style="margin-bottom:12px">
+      <button class="btn primary" id="evAdd">+ 记一条</button>
+      <div class="sp"></div>
+      <select id="evFilter" style="width:auto">
+        <option value="">全部领域</option>
+        <option>人际</option><option>职业</option><option>金钱</option>
+        <option>精力</option><option>学习</option><option>其他</option>
+      </select>
+    </div>
+    <div id="evList"></div>
+  </section>
+
+  <!-- ============ 方向 ============ -->
+  <section class="view" id="v-topics">
+    <div class="card">
+      <h3>我的方向分布</h3>
+      <div id="topicStats"></div>
+      <div class="row wrap" style="margin-top:12px">
+        <button class="btn primary" id="dirAI">AI 诊断：我该深挖哪个</button>
+        <button class="btn" id="topicAdd">+ 新主题</button>
+      </div>
+    </div>
+    <div id="topicsList"></div>
+  </section>
+
+  <!-- ============ 决策 ============ -->
+  <section class="view" id="v-decisions">
+    <div class="row" style="margin-bottom:12px">
+      <button class="btn primary" id="decAdd">+ 新决策</button>
+      <div class="sp"></div>
+      <span class="tiny muted">被否决的分支必须留下理由</span>
+    </div>
+    <div id="decList"></div>
+  </section>
+
+  <!-- ============ 人际 ============ -->
+  <section class="view" id="v-people">
+    <div class="row" style="margin-bottom:12px">
+      <button class="btn primary" id="personAdd">+ 加一个人</button>
+      <div class="sp"></div>
+      <span class="tiny muted">付出 / 得到 两面记账</span>
+    </div>
+    <div id="peopleList"></div>
+  </section>
+
+  <!-- ============ 风控 ============ -->
+  <section class="view" id="v-guard">
+    <div class="card">
+      <h3>AI 性格画像 <span class="sp"></span>
+        <button class="btn sm" id="traitAI">重新分析</button>
+      </h3>
+      <div class="small muted" style="margin-bottom:10px">
+        每条结论都必须挂真实事件编号，编造的证据会被自动丢弃。你可以采纳或驳回——驳回也要写理由。
+      </div>
+      <div id="traitsList"></div>
+    </div>
+
+    <div class="card">
+      <h3>长期记忆 <span class="sp"></span>
+        <button class="btn sm" id="memAdd">+ 加一条</button>
+      </h3>
+      <div class="small muted" style="margin-bottom:10px">
+        你亲手确认的事实。AI 把它当<strong>前提</strong>，不质疑、不重新推导。
+        与上方「画像」的区别：画像是可被推翻的推论，记忆是不可推翻的已知。每次 AI 分析都会带上这里的内容。
+      </div>
+      <div id="memoryList"></div>
+    </div>
+
+    <div class="card">
+      <h3>知识库 <span class="sp"></span>
+        <span class="tiny muted" id="theoryCount"></span>
+      </h3>
+      <div class="small muted" style="margin-bottom:10px">
+        心理学 / 社会学 / 行为经济学的可引用条目。对话时会按你的问题自动挑几条注入，
+        AI 用它必须写 <code>[理论#编号]</code>，编号会被校验。库里没有的，它必须明说。
+      </div>
+      <div class="row" style="gap:8px;margin-bottom:10px">
+        <input id="theoryQ" placeholder="搜概念或场景，如「拒绝」「拖延」">
+        <button class="btn" id="theorySearch">搜</button>
+      </div>
+      <div id="theoryList"></div>
+    </div>
+
+    <div class="card">
+      <h3>风控阈值 <span class="sp"></span><span class="tiny muted">改完点保存</span></h3>
+      <div id="rulesList"></div>
+      <button class="btn primary" id="rulesSave" style="margin-top:12px;width:100%">保存阈值</button>
+    </div>
+
+    <div class="card">
+      <h3>已处置记录</h3>
+      <div id="acksList"></div>
+    </div>
+
+    <div class="card">
+      <h3>运行状态与备份 <span class="sp"></span>
+        <button class="btn sm" id="backupBtn">立即备份</button>
+      </h3>
+      <div id="healthBox"></div>
+    </div>
+
+    <div class="card">
+      <h3>数据与备份</h3>
+      <div class="small muted" style="margin-bottom:10px">全部数据存在本机 <code>data/mirror.db</code>，不经过任何云端。</div>
+      <div class="row wrap">
+        <button class="btn" id="exportBtn">导出全部 JSON</button>
+        <button class="btn" id="aiPing">测试 AI 连接</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="modal-bg" id="modalBg">
+  <div class="modal" id="modalBox"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
