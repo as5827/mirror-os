@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """数据层：SQLite schema + 连接 + 默认风控阈值。
 
 设计原则（对应使用者的性格要求）：
@@ -14,7 +14,13 @@ from datetime import date, datetime
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
-DB_PATH = os.path.join(DATA_DIR, "mirror.db")
+
+# 可以用 MIRROR_DB 指向另一个数据库文件。
+# 用途：跑 apitest.py 时切到 data/test.db，避免测试数据污染真实记录。
+# 不设这个变量时行为完全不变（仍然用 data/mirror.db）。
+DB_PATH = os.environ.get("MIRROR_DB") or os.path.join(DATA_DIR, "mirror.db")
+if not os.path.isabs(DB_PATH):
+    DB_PATH = os.path.join(BASE_DIR, DB_PATH)
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -264,7 +270,25 @@ CREATE TRIGGER IF NOT EXISTS msg_au AFTER UPDATE ON messages BEGIN
   INSERT INTO messages_fts(rowid,content) VALUES(new.id,new.content);
 END;
 
--- ⑮ 联网检索到的文献（本地缓存，可被引用为 [文献#id]）。
+-- ⑮ 理论条目（知识库）。★这张表以前漏在 SCHEMA 里，
+-- 靠 knowledge.ensure_seeded 的第一行 SELECT 才暴露：
+-- 全新数据库没有 theory 表，导致知识库整块失效且静默无报错。
+CREATE TABLE IF NOT EXISTS theory(
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    en         TEXT DEFAULT '',
+    field      TEXT DEFAULT '心理学',
+    source     TEXT DEFAULT '',
+    summary    TEXT NOT NULL,
+    applies    TEXT DEFAULT '',
+    misuse     TEXT DEFAULT '',
+    signal     TEXT DEFAULT '',
+    tags       TEXT DEFAULT '',
+    enabled    INTEGER DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+
+-- ⑯ 联网检索到的文献（本地缓存，可被引用为 [文献#id]）。
 -- 为什么要缓存：一是省请求、二是断网后这些证据仍然可查可引。
 CREATE TABLE IF NOT EXISTS reference(
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

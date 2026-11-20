@@ -1,22 +1,97 @@
 # -*- coding: utf-8 -*-
-"""端到端接口测试：真起 HTTP 请求，覆盖鉴权、增删改、以及三条铁律的强制校验。"""
+"""端到端接口测试：真起 HTTP 请求，覆盖鉴权、增删改、以及三条铁律的强制校验。
+
+隔离设计：自己拉起一个测试服务（独立端口 + 独立数据库 data/test.db），
+测完就杀掉并删库。**不会碰 data/mirror.db 里的真实记录**。
+为什么必须这样：测试是走 HTTP 的，光在本进程设环境变量影响不到已经跑着的服务，
+那样会把你真实的库灌满测试数据（踩过）。
+"""
+import atexit
 import http.cookiejar
 import json
 import os
+import socket
+import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
-BASE = "http://127.0.0.1:8765"
+HERE = os.path.dirname(os.path.abspath(__file__))
+TEST_PORT = 8798
+TEST_DB = os.path.join("data", "test.db")
+BASE = f"http://127.0.0.1:{TEST_PORT}"
+
 PIN = None
-for line in open(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), encoding="utf-8"):
-    if line.startswith("MIRROR_PIN="):
-        PIN = line.split("=", 1)[1].strip()
+_env = os.path.join(HERE, ".env")
+if os.path.exists(_env):
+    for line in open(_env, encoding="utf-8"):
+        if line.startswith("MIRROR_PIN="):
+            PIN = line.split("=", 1)[1].strip()
 
 cj = http.cookiejar.CookieJar()
 op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
 PASS, FAIL = [], []
+
+
+def _port_free(port):
+    with socket.socket() as s:
+        return s.connect_ex(("127.0.0.1", port)) != 0
+
+
+def _start_test_server():
+    """起一个用独立数据库的测试服务；端口被占则直接报错退出。"""
+    # 清掉上次残留
+    for suffix in ("", "-wal", "-shm"):
+        f = os.path.join(HERE, TEST_DB + suffix)
+        if os.path.exists(f):
+            os.remove(f)
+    if not _port_free(TEST_PORT):
+        print(f"[X] 端口 {TEST_PORT} 被占用，无法启动测试服务。请先关掉它再跑。")
+        sys.exit(2)
+    env = dict(os.environ)
+    env.update({
+        "MIRROR_DB": TEST_DB,
+        "MIRROR_PORT": str(TEST_PORT),
+        "MIRROR_OPEN_BROWSER": "0",
+        "MIRROR_CONSOLE": "0",
+        "PYTHONIOENCODING": "utf-8",
+    })
+    proc = subprocess.Popen([sys.executable, "-m", "app.server"], cwd=HERE, env=env,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(120):                      # 最多等 24 秒
+        if proc.poll() is not None:
+            print("[X] 测试服务启动失败（进程已退出）")
+            sys.exit(2)
+        if not _port_free(TEST_PORT):
+            return proc
+        time.sleep(0.2)
+    proc.terminate()
+    print("[X] 测试服务启动超时")
+    sys.exit(2)
+
+
+def _stop_test_server(proc):
+    try:
+        proc.terminate()
+        proc.wait(timeout=10)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    for suffix in ("", "-wal", "-shm"):
+        f = os.path.join(HERE, TEST_DB + suffix)
+        try:
+            if os.path.exists(f):
+                os.remove(f)
+        except OSError:
+            pass
+
+
+_srv = _start_test_server()
+atexit.register(lambda: _stop_test_server(_srv))   # 中途断言失败也不留残进程
 
 
 def call(method, path, body=None, expect=200, label=""):
@@ -232,4 +307,6 @@ print("\n" + "=" * 60)
 print(f"通过 {len(PASS)} 项，失败 {len(FAIL)} 项")
 for f in FAIL:
     print("  FAIL:", f)
+_stop_test_server(_srv)
+print("  已关闭测试服务并删除 data/test.db（你的真实数据库未受影响）")
 sys.exit(0 if not FAIL else 1)

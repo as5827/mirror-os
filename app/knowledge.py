@@ -284,7 +284,16 @@ THEORIES = [
 
 
 def ensure_seeded(conn):
-    """首次启动灌入理论条目。已有数据不覆盖，保留你的修改。"""
+    """首次启动灌入理论条目。已有数据不覆盖，保留你的修改。
+
+    自己先确保表存在：db.SCHEMA 里漏过这张表，结果全新数据库上这里第一句 SELECT
+    就抛 no such table，而 init() 把异常吞了，知识库静默变空。所以不依赖外部建表。
+    """
+    conn.execute("""CREATE TABLE IF NOT EXISTS theory(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, en TEXT DEFAULT '',
+        field TEXT DEFAULT '心理学', source TEXT DEFAULT '', summary TEXT NOT NULL,
+        applies TEXT DEFAULT '', misuse TEXT DEFAULT '', signal TEXT DEFAULT '',
+        tags TEXT DEFAULT '', enabled INTEGER DEFAULT 1, created_at TEXT NOT NULL)""")
     n = conn.execute("SELECT COUNT(*) FROM theory").fetchone()[0]
     if n:
         return 0
