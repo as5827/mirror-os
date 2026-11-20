@@ -8,6 +8,25 @@
 - 手机可用：同一 WiFi 打开电脑的局域网地址即可，像 App 一样加到桌面
 - AI 只在你主动点分析时调用 DeepSeek，且**每条结论必须挂真实事件编号**，编造的证据自动丢弃
 
+## 快速开始
+
+```bash
+git clone https://github.com/as5827/mirror-os.git
+cd mirror-os
+python -m app.server
+```
+
+第一次启动会：
+
+1. 自动生成 `.env`，里面有**这台机器独有**的随机 PIN 和会话密钥，PIN 会打印在控制台
+2. 自动建库 `data/mirror.db`，灌入 37 条知识库条目
+3. 自动打开浏览器
+
+然后去 `.env` 填上你自己的 `DEEPSEEK_API_KEY`，重启即可。
+没有 Key 也能用，只是 AI 分析和对话不可用。
+
+要求：Python **3.9+**，Windows / macOS / Linux 均可。
+
 ---
 
 ## 零、数据在哪 · 每个人自己部署
