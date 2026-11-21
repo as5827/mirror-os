@@ -248,6 +248,10 @@ def send(conn, conv_id, user_text, skill=None):
     # 再手动 append 一次——不是两次。之前漏了排除，模型会看到同一句话两遍。
     msgs, meta = build_context(conn, conv, exclude_id=uid, recall_query=text)
     msgs.append({"role": "user", "content": text})
+    # build_context 里的字数/轮次是在追加当前这句之前算的，这里补上，
+    # 否则界面上第一句会显示「0 轮」，字数也会少算当前这句。
+    meta["turns"] = len(msgs) - 1
+    meta["chars"] = sum(len(m["content"]) for m in msgs)
 
     try:
         reply = ai.chat(msgs, temperature=0.5, max_tokens=2200, json_mode=False)
