@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """长期对话引擎。
 
 要解决的问题：时间线会很长很大（几个月、上万字），
@@ -53,8 +53,13 @@ def _clip(s, n):
     return s if len(s) <= n else s[:n] + "…"
 
 
-def build_context(conn, conv, upto_message_id=None):
-    """返回 (system_prompt, messages_list, meta)。meta 记录注入了什么，便于审计。"""
+def build_context(conn, conv, exclude_id=None, recall_query=None):
+    """返回 (messages_list, meta)。meta 记录注入了什么，便于审计。
+
+    exclude_id：拼上下文前刚落库的那条消息 id，要从历史里排除，避免重复注入。
+    recall_query：排除之后历史里没有当前这句话了，用它补上检索关键词，
+                  否则「按最近用户消息找相关事件」会退化成用上一句去搜。
+    """
     parts = []
     meta = {"memory": [], "traits": [], "events": [], "summary_ids": [], "skill": conv.get("skill") or ""}
 
@@ -92,17 +97,22 @@ def build_context(conn, conv, upto_message_id=None):
             parts.append(_clip(s["content"], 1800))
 
     # 5. 历史消息
+    # exclude_id：send() 会先把用户消息落库再拼上下文，如果不排除，这条会既出现在
+    # 历史里、又在 send() 里 append 一次，模型看到同一句话两遍（实测它会回「你发了两遍」）。
     sql = "SELECT id,role,content FROM messages WHERE conversation_id=? AND ok=1"
     args = [conv["id"]]
     if last_cut:
         sql += " AND id>?"
         args.append(last_cut)
+    if exclude_id:
+        sql += " AND id<>?"
+        args.append(exclude_id)
     sql += " ORDER BY id DESC LIMIT ?"
     args.append(TURN_KEEP)
     hist = list(reversed(db.rows(conn.execute(sql, args))))
 
     # 5b. 检索：用最近几条用户消息当查询，找回更早的相关事件
-    q = " ".join([m["content"] for m in hist if m["role"] == "user"][-2:]) or \
+    q = recall_query or " ".join([m["content"] for m in hist if m["role"] == "user"][-2:]) or \
         (hist[-1]["content"] if hist else "")
     ev_txt, ev_ids = ai.recall_events(conn, q, limit=8)
     if ev_txt:
@@ -234,7 +244,9 @@ def send(conn, conv_id, user_text, skill=None):
     conn.commit()
     uid = cur.lastrowid
 
-    msgs, meta = build_context(conn, conv)
+    # 用户消息已经落库（下面 build_context 会读到它），所以用 exclude_id 排除，
+    # 再手动 append 一次——不是两次。之前漏了排除，模型会看到同一句话两遍。
+    msgs, meta = build_context(conn, conv, exclude_id=uid, recall_query=text)
     msgs.append({"role": "user", "content": text})
 
     try:
