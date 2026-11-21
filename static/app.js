@@ -284,6 +284,24 @@ function paintComfortBtn() {
   b.className = 'btn' + (CHAT.comfort === 'off' ? '' : ' primary');
 }
 
+$('#chatExtract').onclick = async () => {
+  if (!CHAT.conv) { toast('先开一个对话'); return; }
+  const b = $('#chatExtract');
+  b.disabled = true; b.textContent = '提炼中…';
+  try {
+    const r = await api('/api/analyze/from-chat', { conversation_id: CHAT.conv });
+    const nm = (r.memory || []).length, nt = (r.traits || []).length;
+    if (!nm && !nt) {
+      toast(`扫了 ${r.scanned_messages} 条消息，没有值得长期沉淀的内容` +
+            (r.dropped ? `（${r.dropped} 条因证据不足被丢弃）` : ''), 'ok');
+    } else {
+      toast(`提炼出 记忆 ${nm} 条 / 画像 ${nt} 条，都是待确认状态，去「风控」页逐条确认`, 'ok');
+    }
+    await loadConvs();
+  } catch (e) { toast(e.message, 'err'); }
+  b.disabled = false; b.textContent = '从对话提炼';
+};
+
 $('#chatComfort').onclick = async () => {
   if (!CHAT.conv) { toast('先开一个对话'); return; }
   const order = ['auto', 'on', 'off'];
@@ -446,8 +464,26 @@ LOADERS.dash = async () => {
       <div class="kpi ${t.high_alerts ? 'alert' : t.open_alerts ? 'warn' : 'ok'}">
         <div class="v">${t.open_alerts}</div><div class="l">待处置预警${t.high_alerts ? ` · ${t.high_alerts} 高危` : ''}</div></div>`;
 
+    // 对话与沉淀：聊天不直接进结构化表，但它是主要输入源，必须让它可见
+    const pend = (t.draft_memory || 0) + (t.draft_traits || 0);
+    $('#dashChat').innerHTML = `
+      <div class="row wrap small" style="gap:14px">
+        <span>对话 <b style="color:var(--fg)">${t.conversations || 0}</b> 段</span>
+        <span>消息 <b style="color:var(--fg)">${t.messages || 0}</b> 条</span>
+        <span>AI 分析 <b style="color:var(--fg)">${t.reports || 0}</b> 次</span>
+        <span>待确认 <b style="color:${pend ? 'var(--warn)' : 'var(--fg)'}">${pend}</b>
+          <span class="muted tiny">（记忆 ${t.draft_memory || 0} / 画像 ${t.draft_traits || 0}）</span></span>
+      </div>
+      <div class="tiny muted" style="margin-top:8px">
+        ${t.last_chat ? `最近一次对话：${esc(String(t.last_chat).slice(5, 16))}` : '还没有对话记录'}
+        ${pend ? ' · 待确认的条目不会进入上下文，需要你在记忆/画像里逐条确认' : ''}
+      </div>
+      ${pend ? `<div class="row" style="margin-top:10px;gap:8px">
+        <button class="btn sm primary" onclick="go('guard')">去确认 ${pend} 条</button>
+      </div>` : ''}`;
+
     $('#dashChart').innerHTML = t.events ? chart(d.series)
-      : '<div class="empty">还没有任何记录。<br>先记 1 条今天真实发生的事，曲线才有东西可画。</div>';
+      : '<div class="empty">还没有任何事件记录。<br>对话不会自动变成事件——可以在聊天页点「从对话提炼」先把事实提取出来。</div>';
     $('#emoHint').textContent = t.events ? '柱=记录数 线=情绪' : '';
 
     const share = d.mainline_share;

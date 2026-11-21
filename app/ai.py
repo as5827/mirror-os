@@ -374,6 +374,123 @@ def consolidate(conn, older_than_days=30, max_domains=4):
     return {"created": created, "covered_events": len(covered), "skipped": skipped,
             "note": "巩固结果是 draft 状态，不会进入上下文，需要你在风控页逐条确认。"}
 
+
+# ------------------------------------------------ 0.5 从对话里提炼记忆与画像
+CHAT_EXTRACT_SCHEMA = """{"memory":[{
+  "statement":"一句关于他的陈述，20-60字，用第二人称，必须是他自己说过的意思，不许拔高",
+  "evidence":[消息id整数数组，至少1个，必须真实存在],
+  "quote":"他原话里的一个片段，必须逐字出现在被引用的那条消息里"
+}],
+"traits":[{
+  "name":"模式名，6字以内",
+  "statement":"你倾向于……（具体到触发条件）",
+  "evidence":[消息id整数数组，至少1个],
+  "direction":"有益|有害|中性",
+  "blind_spot":"在这个模式里他看不见什么",
+  "counter":"一个具体到能今天执行的反制动作",
+  "confidence":0.0到1.0
+}],
+"skipped":"为什么有些内容你判断不该沉淀（一句话，可为空）"}"""
+
+
+def extract_from_chat(conn, conv_id, limit=40):
+    """从一段对话里提炼可以沉淀的长期记忆与行为画像候选。
+
+    为什么需要它：看板、上下文、画像全都只读结构化记录，而用户真正说事情的地方是对话。
+    没有这条通路，聊得再多也只是一段聊天记录，沉淀为零。
+
+    写库时一律 draft —— 必须由他自己确认才进入上下文。
+    这不是保守：模型从对话里读出的「你是个怎样的人」只是推测，
+    直接当事实会污染之后所有判断。
+    """
+    rows = db.rows(conn.execute(
+        "SELECT id,role,content FROM messages WHERE conversation_id=? AND ok=1 "
+        "ORDER BY id DESC LIMIT ?", (conv_id, limit)))
+    if not rows:
+        raise RuntimeError("这段对话还没有内容可提炼。")
+    rows = list(reversed(rows))
+    valid_ids = {r["id"] for r in rows}
+    by_id = {r["id"]: r["content"] for r in rows}
+
+    lines = []
+    for r in rows:
+        who = "他" if r["role"] == "user" else "你"
+        lines.append(f"[#{r['id']}] {who}：{r['content'][:900]}")
+    transcript = "\n".join(lines)
+
+    known, _ = known_block(conn)
+    known_section = (f"\n\n=== 已经沉淀过的结论（不要重复提炼）===\n{known}\n") if known else ""
+
+    prompt = f"""下面是一段真实对话，每行开头 [编号] 是消息编号，可作证据引用。
+
+{transcript}
+{known_section}
+任务：只根据上述对话，提炼值得长期记住的东西。三条硬约束：
+
+1. **只提取他自己说的**。你（镜）说过的话不是证据——你的推测可能正是错的。
+2. 每条结论必须能被引用编号支持，且 quote 必须逐字出自那条消息。
+   做不到就不写，宁可少给。
+3. 只提炼「会长期影响判断」的内容：稳定的偏好、约束、反复出现的行为模式。
+   一次性的情绪、临时安排、当下心情，一律不要。
+
+类别限定：
+- memory：关于他的稳定事实（身份、约束、资源、长期偏好、明确说过的原则）
+- traits：反复出现的行为模式（这段对话里出现过两次，或他有明确自我描述）
+
+输出 JSON：
+{CHAT_EXTRACT_SCHEMA}
+
+如果没有值得沉淀的，两个数组都给空。不要为了交差硬凑。"""
+
+    text = chat([{"role": "system", "content": SYS_COMMON},
+                 {"role": "user", "content": prompt}])
+    data = _parse_json(text)
+
+    created_m, created_t, dropped = [], [], 0
+
+    def _clean_ev(arr):
+        return [int(x) for x in (arr or []) if str(x).isdigit() and int(x) in valid_ids]
+
+    for m in (data.get("memory") or []):
+        stmt = (m.get("statement") or "").strip()
+        ev = _clean_ev(m.get("evidence"))
+        q = (m.get("quote") or "").strip()
+        # 引用必须真实出现在被引用的消息里，否则视为编造
+        grounded = bool(q) and any(q in by_id.get(i, "") for i in ev)
+        if len(stmt) < 6 or not ev or not grounded:
+            dropped += 1
+            continue
+        cur = conn.execute(
+            "INSERT INTO memory(statement,kind,source,status,evidence,created_at) "
+            "VALUES(?,?,?,'draft',?,?)",
+            (stmt, "对话提炼", f"chat:{conv_id}", json.dumps(ev), db.now()))
+        created_m.append({"id": cur.lastrowid, "statement": stmt, "evidence": ev, "quote": q})
+
+    for t in (data.get("traits") or []):
+        name = (t.get("name") or "").strip()[:12]
+        stmt = (t.get("statement") or "").strip()
+        ev = _clean_ev(t.get("evidence"))
+        if not name or len(stmt) < 6 or not ev:
+            dropped += 1
+            continue
+        cur = conn.execute(
+            "INSERT INTO traits(name,direction,statement,evidence,blind_spot,cost,counter,"
+            "confidence,status,source,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,'draft',?,?)",
+            (name, (t.get("direction") or "中性")[:6], stmt, json.dumps(ev),
+             (t.get("blind_spot") or "")[:200], (t.get("cost") or "")[:200],
+             (t.get("counter") or "")[:200],
+             float(t.get("confidence") or 0.5), f"chat:{conv_id}", db.now()))
+        created_t.append({"id": cur.lastrowid, "name": name, "statement": stmt, "evidence": ev})
+
+    conn.commit()
+    _save_report(conn, "extract-chat", {"conversation_id": conv_id, "messages": len(rows)},
+                 {"memory": created_m, "traits": created_t, "dropped": dropped})
+    return {"memory": created_m, "traits": created_t, "dropped": dropped,
+            "scanned_messages": len(rows),
+            "note": "提炼结果都是 draft 状态，不会进入上下文；去「记忆」和「画像」里逐条确认。"}
+
+
 # ---------------------------------------------------------------- 1. 性格归因
 def analyze_personality(conn, limit=60):
     digest = _event_digest(conn, limit)

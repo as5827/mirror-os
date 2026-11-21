@@ -378,6 +378,14 @@ def dashboard(conn):
         "open_decisions": conn.execute("SELECT COUNT(*) FROM decisions WHERE status!='closed'").fetchone()[0],
         "draft_traits": conn.execute("SELECT COUNT(*) FROM traits WHERE status='draft'").fetchone()[0],
         "people": conn.execute("SELECT COUNT(*) FROM people WHERE status!='cut'").fetchone()[0],
+        # 对话与沉淀：聊天不直接进看板，但它是这套系统最主要的输入源，
+        # 所以至少要让它可见——否则聊了几十轮，看板还是一片空白，看不出系统在工作。
+        "conversations": conn.execute("SELECT COUNT(*) FROM conversations").fetchone()[0],
+        "messages": conn.execute("SELECT COUNT(*) FROM messages WHERE ok=1").fetchone()[0],
+        "draft_memory": conn.execute("SELECT COUNT(*) FROM memory WHERE status='draft'").fetchone()[0],
+        "reports": conn.execute("SELECT COUNT(*) FROM reports").fetchone()[0],
+        "last_chat": (conn.execute(
+            "SELECT MAX(created_at) FROM messages WHERE ok=1").fetchone()[0] or ""),
     }
     tm = topic_metrics(conn)
     return {

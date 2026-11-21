@@ -46,6 +46,7 @@
     <div class="row" style="margin-bottom:10px;gap:8px">
       <button class="btn primary" id="chatNew">+ 新对话</button>
       <button class="btn" id="chatComfort">共情：自动</button>
+      <button class="btn" id="chatExtract">从对话提炼</button>
       <button class="btn" id="chatSumm">压缩记忆</button>
       <button class="btn" id="chatWeb">联网：关</button>
       <div class="sp"></div>
@@ -68,6 +69,11 @@
   <section class="view on" id="v-dash">
     <div class="kpis" id="dashKpis"></div>
 
+    <div class="card">
+      <h3>对话与沉淀 <span class="sp"></span>
+        <span class="tiny muted">聊天不进事件表，但它是最主要的输入源</span></h3>
+      <div id="dashChat"></div>
+    </div>
     <div class="card">
       <h3>近 14 天情绪与记录 <span class="sp"></span><span class="tiny muted" id="emoHint"></span></h3>
       <div id="dashChart"></div>

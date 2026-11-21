@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """HTTP 服务：零第三方依赖（标准库 http.server + sqlite3）。
 
 安全模型（因为要绑 0.0.0.0 给手机用）：
@@ -612,6 +612,19 @@ def _an_personality(h, ctx):
 @route("POST", r"/api/analyze/direction")
 def _an_direction(h, ctx):
     return ai.analyze_direction(ctx["conn"])
+
+
+@route("POST", r"/api/analyze/from-chat")
+def _analyze_from_chat(h, ctx):
+    """从一段对话里提炼记忆与画像候选（都落 draft，等他确认）。"""
+    cid = _int(ctx["body"].get("conversation_id"), 0)
+    if not cid:
+        row = db.one(ctx["conn"].execute(
+            "SELECT id FROM conversations ORDER BY updated_at DESC, id DESC LIMIT 1"))
+        if not row:
+            raise Err("还没有对话可以提炼。先在对话页聊几轮。")
+        cid = row["id"]
+    return ai.extract_from_chat(ctx["conn"], cid)
 
 
 @route("POST", r"/api/analyze/consolidate")
