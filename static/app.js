@@ -131,7 +131,10 @@ function md(s) {
 
 function msgHtml(m) {
   const mine = m.role === 'user';
-  if (!m.ok) {
+  // 必须严格判断。原来写的是 if (!m.ok)，而发消息时临时构造的对象没有 ok 字段
+  // （undefined 也是 falsy），结果每条自己发的消息都被渲染成「(发送失败：未知错误)」，
+  // 明明发送是成功的。只有从历史加载的消息带 ok=1，所以刷新后又显示正常。
+  if (m.ok === 0 || m.ok === false) {
     return `<div style="margin:10px 0;text-align:right">
       <div class="chat-bubble bad">(发送失败：${esc(m.err || '未知错误')})</div></div>`;
   }
