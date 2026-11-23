@@ -917,3 +917,62 @@ def ping():
     except (ValueError, AttributeError):
         parsed = {"raw": (txt or "")[:80]}
     return {"ok": True, "reply": parsed}
+
+
+# ------------------------------------------------ 0.6 方向草稿（不依赖方向记录）
+def suggest_direction(conn):
+    """基于已积累的事件、已确认的记忆/画像、以及对话中的候选，给出「大致最优方向」。
+
+    和 analyze_direction 的区别：那个要求先在「方向」里建主题记录；
+    这个只用对话和事件就能出草稿，适合「聊了很久但一条方向都没建」的状态。
+    """
+    from . import organize
+    ev_digest = _event_digest(conn, 40)
+    mem, _ = known_block(conn)
+    pend = organize.pending(conn)
+    topic_hints = [p["payload"] for p in pend if p["kind"] == "topic"]
+    ev_hints = [p["payload"] for p in pend if p["kind"] == "event"]
+
+    if not ev_digest and not topic_hints and not ev_hints:
+        raise RuntimeError("积累的材料还不够给方向判断：先聊几轮、或整理一次对话。")
+
+    hint_lines = []
+    for h in topic_hints[:6]:
+        hint_lines.append(f"- 候选方向：{h.get('name')}（他的说法：{(h.get('why') or '')[:80]}）")
+    for h in ev_hints[:6]:
+        hint_lines.append(f"- 他最近的事：{h.get('title')}（{(h.get('domain') or '')}）")
+
+    prompt = f"""客户的原始诉求：「我很喜欢学习各种东西，但是浅而不精。
+我需要找到我最喜欢而且可以深入持续学习的方向。」
+
+=== 他记录过的事件 ===
+{ev_digest or '（暂无）'}
+
+=== 已确认的长期事实与画像 ===
+{mem or '（暂无）'}
+
+=== 尚未确认的候选（来自对话，仅供参考，不能当成事实）===
+{chr(10).join(hint_lines) if hint_lines else '（暂无）'}
+
+任务：给出「大致的最优方向」。三条硬约束：
+1. 只能基于上面材料。材料不足就直说不足，不要编一个听起来合理的方向。
+2. 每个方向的依据要说清是哪条事件/记忆支撑的；没有支撑的不要列。
+3. 这是一个草稿，不是判决。置信度要诚实。
+
+输出 JSON：
+{{"diagnosis":"120字以内：他现在实际在追求什么（掌握，还是「刚开始学」的感觉），依据是什么",
+"directions":[{{"name":"方向名，8字以内","why":"为什么是它，引用具体事件或记忆",
+  "sustainability":0到1,"evidence":"支撑它的事实（不行就写「材料不足」）",
+  "risk":"这条方向最容易在哪一步放弃"}}],
+"pick":"只选一个最该先押的方向名",
+"why_pick":"为什么是它而不是别的，80字以内",
+"confidence":0到1,
+"missing":"还缺什么材料才能更有把握（一句话）",
+"next_30_days":["30天内可验证的动作，2-3条，要有产出物或数字"]}}"""
+
+    text = chat([{"role": "system", "content": SYS_COMMON},
+                 {"role": "user", "content": prompt}])
+    data = _parse_json(text)
+    data["_generated_at"] = db.now()
+    _save_report(conn, "direction-draft", {"events": bool(ev_digest)}, data)
+    return data

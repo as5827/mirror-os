@@ -475,6 +475,50 @@ function chart(series) {
     ${bars}${path}${labels}</svg>`;
 }
 
+/* ------------------------------------------------------- 方向草稿 / 自动整理 */
+async function askDirection(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '生成中…'; }
+  try {
+    const d = await api('/api/autopilot/direction', {});
+    toast(d.pick === '材料不足' ? '材料还不够，它给了一份「要补什么」的清单' : '方向草稿已更新', 'ok');
+    LOADERS.dash();
+  } catch (e) { toast(e.message, 'err'); }
+  if (btn) { btn.disabled = false; btn.textContent = '现在生成'; }
+}
+
+async function renderDirection() {
+  const box = document.getElementById('dashDirection');
+  if (!box) return;
+  let d = {};
+  try { d = await api('/api/autopilot'); } catch (e) { box.innerHTML = ''; return; }
+  const st = d.status || {};
+  const dir = d.direction;
+  const prog = `<div class="tiny muted" style="margin-bottom:10px">
+    自动整理：已攒 <b style="color:${(st.pending_messages || 0) >= (st.threshold || 30) ? 'var(--warn)' : 'var(--fg)'}">${st.pending_messages || 0}</b>
+    / ${st.threshold || 30} 条${st.remaining ? ` · 再聊 ${st.remaining} 条自动整理` : ' · 已达阈值'}
+  </div>`;
+  if (!dir) {
+    box.innerHTML = prog + '<div class="empty">还没有方向草稿。<br>聊够一轮，或点右上「现在生成」。</div>';
+    return;
+  }
+  const dirs = (dir.directions || []).map(x => `
+    <div style="padding:8px 0;border-top:1px solid var(--line)">
+      <div class="row"><b>${esc(x.name || '')}</b><div class="sp"></div>
+        <span class="chip ${x.name === dir.pick ? 'good' : ''}">${x.name === dir.pick ? '推荐' : '备选'}</span>
+        <span class="tiny muted">可持续 ${x.sustainability == null ? '—' : Math.round(x.sustainability * 100) + '%'}</span></div>
+      <div class="tiny muted" style="margin-top:3px">${esc(x.why || '')}</div>
+      ${x.risk ? `<div class="tiny" style="margin-top:3px;color:var(--mut)">最可能放弃在：${esc(x.risk)}</div>` : ''}
+    </div>`).join('');
+  box.innerHTML = prog + `
+    <div class="small" style="margin-bottom:8px">${esc(dir.diagnosis || '')}</div>
+    ${dirs}
+    ${dir.why_pick ? `<div class="small" style="margin-top:10px"><b>为什么押它：</b>${esc(dir.why_pick)}</div>` : ''}
+    ${dir.missing ? `<div class="tiny" style="margin-top:8px;color:var(--warn)">还缺：${esc(dir.missing)}</div>` : ''}
+    <div class="tiny muted" style="margin-top:8px">
+      置信度 ${dir.confidence == null ? '—' : Math.round(dir.confidence * 100) + '%'}
+      ${dir._created_at ? ' · 生成于 ' + esc(String(dir._created_at).slice(5, 16)) : ''}
+      · 这只是草稿，采纳与否你定</div>`;
+}
 LOADERS.dash = async () => {
   try {
     const d = await api('/api/dashboard');
@@ -489,6 +533,7 @@ LOADERS.dash = async () => {
 
     // 对话与沉淀：聊天不直接进结构化表，但它是主要输入源，必须让它可见
     const pend = (t.draft_memory || 0) + (t.draft_traits || 0) + (t.proposals || 0);
+    renderDirection();   // 方向草稿 + 自动整理进度（独立请求，失败不影响上面）
     $('#dashChat').innerHTML = `
       <div class="row wrap small" style="gap:14px">
         <span>对话 <b style="color:var(--fg)">${t.conversations || 0}</b> 段</span>

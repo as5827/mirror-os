@@ -302,7 +302,16 @@ def send(conn, conv_id, user_text, skill=None):
     conn.execute("UPDATE conversations SET updated_at=? WHERE id=?", (db.now(), conv_id))
     conn.commit()
 
-    return {"message_id": c2.lastrowid, "user_message_id": uid, "reply": reply,
+    # 自动整理：放在回复落库之后，避免后台线程和这轮写入抢数据库。
+    # 达到阈值才起线程，起完立刻返回，绝不阻塞这轮回复。
+    auto_hint = ""
+    try:
+        from . import autopilot
+        auto_hint = autopilot.tick(conn, conv_id)
+    except Exception:          # noqa: BLE001 - 自动整理失败不能影响聊天
+        auto_hint = ""
+
+    return {"message_id": c2.lastrowid, "user_message_id": uid, "reply": reply,"auto": auto_hint,
             "refs": good, "bad_refs": bad,
             "context": {"chars": meta["chars"], "turns": meta["turns"],
                         "memory": len(meta["memory"]), "traits": len(meta["traits"]),

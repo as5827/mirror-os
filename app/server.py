@@ -28,7 +28,7 @@ from app import bootstrap  # noqa: E402
 # 放到 main() 里再生成就来不及了（第一次启动会读到空的 API Key）。
 bootstrap.ensure_env()
 
-from app import ai, chat, db, engine, knowledge, organize, skills, websearch  # noqa: E402
+from app import ai, autopilot, chat, db, engine, knowledge, organize, skills, websearch  # noqa: E402
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -612,6 +612,23 @@ def _an_personality(h, ctx):
 @route("POST", r"/api/analyze/direction")
 def _an_direction(h, ctx):
     return ai.analyze_direction(ctx["conn"])
+
+
+@route("GET", r"/api/autopilot")
+def _autopilot_status(h, ctx):
+    cid = _int((ctx["query"].get("conversation_id") or ["0"])[0], 0)
+    if not cid:
+        row = db.one(ctx["conn"].execute(
+            "SELECT id FROM conversations ORDER BY updated_at DESC, id DESC LIMIT 1"))
+        cid = row["id"] if row else 0
+    st = autopilot.status(ctx["conn"], cid) if cid else {"ready": False, "pending_messages": 0}
+    return {"status": st, "direction": autopilot.latest_direction(ctx["conn"])}
+
+
+@route("POST", r"/api/autopilot/direction")
+def _autopilot_direction(h, ctx):
+    """手动要一份方向草稿（也用于阈值没到但想提前看）。"""
+    return ai.suggest_direction(ctx["conn"])
 
 
 @route("GET", r"/api/proposals")
