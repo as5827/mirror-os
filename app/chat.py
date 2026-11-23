@@ -16,7 +16,7 @@
 import json
 import re
 
-from . import ai, comfort, db, knowledge, persona, phrasing, skills, websearch
+from . import ai, comfort, db, knowledge, persona, phrasing, skills, tone, websearch
 
 CHAR_BUDGET = 26000      # 单次上下文总字符上限（含历史，不含回复）
 TURN_KEEP = 16           # 默认保留最近多少条消息原话
@@ -161,6 +161,11 @@ def build_context(conn, conv, exclude_id=None, recall_query=None):
     cblock, cmeta = comfort.instruction(cmode, q)
     parts.append("\n=== 本轮体例 ===\n" + cblock)
     meta["comfort"] = cmeta
+
+    # 5e2. 语气层：同一套判断，用对事不对人的方式说
+    tblock = tone.block(conv.get("tone") or "warm")
+    parts.append("\n=== 语气 ===\n" + tblock)
+    meta["tone"] = (conv.get("tone") or "warm")
 
     # 5f. 话术层：他在问「这句话该怎么说」时，按情境给可照说的原话
     phr_block, phr_meta = phrasing.instruction(q)

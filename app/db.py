@@ -349,6 +349,9 @@ def _migrate(conn):
     if "web_lang" not in conv:
         # zh=只查中文文献 / en=只查英文 / both=两边都查（默认）
         conn.execute("ALTER TABLE conversations ADD COLUMN web_lang TEXT DEFAULT 'both'")
+    if "tone" not in conv:
+        # warm=温和对事（默认）/ strict=直接判词式
+        conn.execute("ALTER TABLE conversations ADD COLUMN tone TEXT DEFAULT 'warm'")
     if "comfort" not in conv:
         # auto=按情绪信号自动决定 / on=有情绪就先共情 / off=一律直接分析
         conn.execute("ALTER TABLE conversations ADD COLUMN comfort TEXT DEFAULT 'auto'")

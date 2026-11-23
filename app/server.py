@@ -670,6 +670,17 @@ def _conv_web(h, ctx, cid):
     return {"ok": True, "web": bool(row["web"]), "lang": row["web_lang"] or "both"}
 
 
+@route("POST", r"/api/conversations/(\d+)/tone")
+def _conv_tone(h, ctx, cid):
+    """设置语气：warm（温和对事，默认）/ strict（直接判词式）。"""
+    mode = _s(ctx["body"].get("mode"), "warm")
+    if mode not in ("warm", "strict"):
+        raise Err("只能是 warm / strict")
+    ctx["conn"].execute("UPDATE conversations SET tone=? WHERE id=?", (mode, _int(cid)))
+    ctx["conn"].commit()
+    return {"ok": True, "mode": mode}
+
+
 @route("POST", r"/api/conversations/(\d+)/comfort")
 def _conv_comfort(h, ctx, cid):
     """设置本轮体例：auto（按情绪自动）/ on（先共情）/ off（直接分析）。"""

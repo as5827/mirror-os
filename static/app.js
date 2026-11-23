@@ -106,7 +106,7 @@ $('#nav').addEventListener('click', e => {
 window.go = go;
 
 /* ------------------------------------------------------------------ 对话 */
-const CHAT = { conv: 0, skill: '', sending: false, skills: [], web: false, webLang: 'both', comfort: 'auto' };
+const CHAT = { conv: 0, skill: '', sending: false, skills: [], web: false, webLang: 'both', comfort: 'auto', tone: 'warm' };
 
 function refChips(refs, bad) {
   const cls = { '事件': 'acc', '决策': 'acc', '记忆': 'warn', '画像': 'warn',
@@ -275,6 +275,27 @@ async function sendMsg() {
 
 $('#chatNew').onclick = newConv;
 $('#chatSend').onclick = sendMsg;
+
+function paintToneBtn() {
+  const b = $('#chatTone');
+  if (!b) return;
+  const warm = (CHAT.tone || 'warm') !== 'strict';
+  b.textContent = '语气：' + (warm ? '温和' : '直接');
+  b.className = 'btn' + (warm ? ' primary' : '');
+}
+
+$('#chatTone').onclick = async () => {
+  if (!CHAT.conv) { toast('先开一个对话'); return; }
+  const next = (CHAT.tone || 'warm') === 'strict' ? 'warm' : 'strict';
+  try {
+    const r = await api(`/api/conversations/${CHAT.conv}/tone`, { mode: next });
+    CHAT.tone = r.mode;
+    paintToneBtn();
+    toast(r.mode === 'warm'
+      ? '温和：判断落在事上，不落在人身上；术语说人话'
+      : '直接：判词式短句，不铺垫', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+};
 
 function paintComfortBtn() {
   const b = $('#chatComfort');
