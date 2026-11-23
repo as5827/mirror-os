@@ -288,7 +288,22 @@ CREATE TABLE IF NOT EXISTS theory(
     created_at TEXT NOT NULL
 );
 
--- ⑯ 联网检索到的文献（本地缓存，可被引用为 [文献#id]）。
+-- ⑯ 对话整理出来的候选条目（暂存区）
+-- 为什么不直接写进 events/decisions/people：那些表有十几处查询在读（看板、预警、
+-- 检索、对话上下文），塞进去会让「AI 猜的东西」变成所有结论的地基。
+-- 这里只放候选，用户采纳时才写入正式表。
+CREATE TABLE IF NOT EXISTS proposals(
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL,          -- event / decision / person / topic
+    payload    TEXT NOT NULL,          -- JSON，字段对应目标表
+    source     TEXT DEFAULT '',        -- chat:<会话id>
+    status     TEXT DEFAULT 'pending', -- pending / accepted / rejected
+    note       TEXT DEFAULT '',        -- 模型为什么认为值得记（一句话）
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status, kind);
+
+-- ⑰ 联网检索到的文献（本地缓存，可被引用为 [文献#id]）。
 -- 为什么要缓存：一是省请求、二是断网后这些证据仍然可查可引。
 CREATE TABLE IF NOT EXISTS reference(
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -349,6 +364,10 @@ def _migrate(conn):
     if "web_lang" not in conv:
         # zh=只查中文文献 / en=只查英文 / both=两边都查（默认）
         conn.execute("ALTER TABLE conversations ADD COLUMN web_lang TEXT DEFAULT 'both'")
+    if "extracted_upto" not in conv:
+        # 对话整理到哪条消息了。重复点「整理对话」只处理新增部分，
+        # 否则模型每次给同一件事换个说法，候选会越堆越多。
+        conn.execute("ALTER TABLE conversations ADD COLUMN extracted_upto INTEGER DEFAULT 0")
     if "tone" not in conv:
         # warm=温和对事（默认）/ strict=直接判词式
         conn.execute("ALTER TABLE conversations ADD COLUMN tone TEXT DEFAULT 'warm'")

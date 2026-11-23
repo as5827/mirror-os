@@ -386,6 +386,9 @@ def dashboard(conn):
         "reports": conn.execute("SELECT COUNT(*) FROM reports").fetchone()[0],
         "last_chat": (conn.execute(
             "SELECT MAX(created_at) FROM messages WHERE ok=1").fetchone()[0] or ""),
+        # 对话整理出来的候选条目（暂存区），确认后才进各自正式表
+        "proposals": conn.execute(
+            "SELECT COUNT(*) FROM proposals WHERE status='pending'").fetchone()[0],
     }
     tm = topic_metrics(conn)
     return {

@@ -28,7 +28,7 @@ from app import bootstrap  # noqa: E402
 # 放到 main() 里再生成就来不及了（第一次启动会读到空的 API Key）。
 bootstrap.ensure_env()
 
-from app import ai, chat, db, engine, knowledge, skills, websearch  # noqa: E402
+from app import ai, chat, db, engine, knowledge, organize, skills, websearch  # noqa: E402
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
@@ -612,6 +612,24 @@ def _an_personality(h, ctx):
 @route("POST", r"/api/analyze/direction")
 def _an_direction(h, ctx):
     return ai.analyze_direction(ctx["conn"])
+
+
+@route("GET", r"/api/proposals")
+def _proposals_get(h, ctx):
+    kind = (ctx["query"].get("kind") or [""])[0].strip() or None
+    return {"proposals": organize.pending(ctx["conn"], kind), "counts": organize.counts(ctx["conn"])}
+
+
+@route("POST", r"/api/proposals/(\d+)/accept")
+def _proposal_accept(h, ctx, pid):
+    kind, new_id = organize.accept(ctx["conn"], _int(pid))
+    return {"ok": True, "kind": kind, "id": new_id}
+
+
+@route("POST", r"/api/proposals/(\d+)/reject")
+def _proposal_reject(h, ctx, pid):
+    organize.reject(ctx["conn"], _int(pid), _s(ctx["body"].get("reason")))
+    return {"ok": True}
 
 
 @route("POST", r"/api/analyze/from-chat")

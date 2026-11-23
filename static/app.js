@@ -311,6 +311,7 @@ $('#chatExtract').onclick = async () => {
   b.disabled = true; b.textContent = '提炼中…';
   try {
     const r = await api('/api/analyze/from-chat', { conversation_id: CHAT.conv });
+if (r.skipped) { toast(r.skipped, 'ok'); b.disabled = false; b.textContent = '整理对话'; return; }
     const nm = (r.memory || []).length, nt = (r.traits || []).length;
     if (!nm && !nt) {
       toast(`扫了 ${r.scanned_messages} 条消息，没有值得长期沉淀的内容` +
@@ -320,7 +321,7 @@ $('#chatExtract').onclick = async () => {
     }
     await loadConvs();
   } catch (e) { toast(e.message, 'err'); }
-  b.disabled = false; b.textContent = '从对话提炼';
+  b.disabled = false; b.textContent = '整理对话';
 };
 
 $('#chatComfort').onclick = async () => {
@@ -486,7 +487,7 @@ LOADERS.dash = async () => {
         <div class="v">${t.open_alerts}</div><div class="l">待处置预警${t.high_alerts ? ` · ${t.high_alerts} 高危` : ''}</div></div>`;
 
     // 对话与沉淀：聊天不直接进结构化表，但它是主要输入源，必须让它可见
-    const pend = (t.draft_memory || 0) + (t.draft_traits || 0);
+    const pend = (t.draft_memory || 0) + (t.draft_traits || 0) + (t.proposals || 0);
     $('#dashChat').innerHTML = `
       <div class="row wrap small" style="gap:14px">
         <span>对话 <b style="color:var(--fg)">${t.conversations || 0}</b> 段</span>
@@ -571,7 +572,92 @@ window.ackAlert = async (fp, status) => {
 };
 
 /* ------------------------------------------------------------------ 事件 */
+/* ---------------------------------------------------------- 对话整理出来的候选 */
+const PEND_BOX = { event: 'pendEvents', topic: 'pendTopics', decision: 'pendDecs', person: 'pendPeople' };
+const PEND_NAME = { event: '事件', topic: '方向', decision: '决策', person: '人际' };
+
+function propTitle(kind, p) {
+  if (kind === 'event') return p.title || '(无标题)';
+  if (kind === 'topic') return p.name || '(无名称)';
+  if (kind === 'person') return p.name || '(无姓名)';
+  if (kind === 'decision') return p.title || '(无标题)';
+  return '(未知)';
+}
+
+function propDetail(kind, p) {
+  const bits = [];
+  if (kind === 'event') {
+    if (p.on_date) bits.push(`日期 ${esc(p.on_date)}`);
+    if (p.domain) bits.push(esc(p.domain));
+    if (p.my_actions) bits.push(`我做了：${esc(p.my_actions)}`);
+    if (p.other_response) bits.push(`对方：${esc(p.other_response)}`);
+  } else if (kind === 'topic') {
+    if (p.domain) bits.push(esc(p.domain));
+    if (p.why) bits.push(esc(p.why));
+  } else if (kind === 'person') {
+    if (p.relation) bits.push(esc(p.relation));
+    if (p.note) bits.push(esc(p.note));
+  } else if (kind === 'decision') {
+    if (p.context) bits.push(esc(p.context));
+    if (p.chosen) bits.push(`选了：${esc(p.chosen)}`);
+    if (p._complete === false) bits.push('<span style="color:var(--bad)">缺否决理由/二阶效应，采纳会被拒绝</span>');
+  }
+  return bits.join(' · ');
+}
+
+async function renderProposals(kind) {
+  const box = document.getElementById(PEND_BOX[kind]);
+  if (!box) return;
+  let list = [];
+  try {
+    const d = await api('/api/proposals?kind=' + kind);
+    list = d.proposals || [];
+  } catch (e) { box.innerHTML = ''; return; }
+  if (!list.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `
+    <div class="card" style="border-color:var(--warn)">
+      <h3>待确认 · 来自对话 <span class="sp"></span>
+        <span class="tiny muted">${list.length} 条 ${PEND_NAME[kind]}候选，采纳后才进正式表</span></h3>
+      ${list.map(x => `
+        <div class="row" style="gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--line)">
+          <div style="flex:1;min-width:0">
+            <div><b>${esc(propTitle(kind, x.payload))}</b></div>
+            <div class="tiny muted" style="margin-top:3px">${propDetail(kind, x.payload)}</div>
+            ${x.note ? `<div class="tiny" style="margin-top:3px;color:var(--mut)">${esc(x.note)}</div>` : ''}
+          </div>
+          <button class="btn sm primary" onclick="acceptProp(${x.id},'${kind}')">采纳</button>
+          <button class="btn sm ghost" onclick="rejectProp(${x.id},'${kind}')">丢弃</button>
+        </div>`).join('')}
+    </div>`;
+}
+
+async function acceptProp(id, kind) {
+  try {
+    await api(`/api/proposals/${id}/accept`, {});
+    toast('已采纳，写入' + PEND_NAME[kind], 'ok');
+    renderProposals(kind);
+    if (LOADERS[kind === 'event' ? 'events' : kind === 'topic' ? 'topics'
+        : kind === 'decision' ? 'decisions' : 'people']) {
+      LOADERS[kind === 'event' ? 'events' : kind === 'topic' ? 'topics'
+        : kind === 'decision' ? 'decisions' : 'people']();
+    }
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function rejectProp(id, kind) {
+  const why = await askText({
+    title: '丢弃这条候选', label: '为什么丢弃（至少 8 字）', minLength: 8,
+    placeholder: '例如：这不是事实，是对话里的假设', danger: true, confirm: '丢弃',
+  });
+  if (!why) return;
+  try {
+    await api(`/api/proposals/${id}/reject`, { reason: why });
+    toast('已丢弃');
+    renderProposals(kind);
+  } catch (e) { toast(e.message, 'err'); }
+}
 LOADERS.events = async () => {
+  renderProposals('event');
   const dom = $('#evFilter').value;
   try {
     const d = await api('/api/events' + (dom ? '?domain=' + encodeURIComponent(dom) : ''));
@@ -655,6 +741,7 @@ $('#evAdd').onclick = () => {
 const DEPTH = ['刚接触', '能聊两句', '能讲清楚', '能产出东西', '专业水平', '能靠它吃饭'];
 
 LOADERS.topics = async () => {
+  renderProposals('topic');
   try {
     const d = await api('/api/topics');
     const share = d.mainline_share;
@@ -1023,6 +1110,7 @@ function renderDec(state, d) {
 }
 
 LOADERS.decisions = async () => {
+  renderProposals('decision');
   try {
     const d = await api('/api/decisions');
     $('#decList').innerHTML = d.decisions.length ? d.decisions.map(x => {
@@ -1150,6 +1238,7 @@ window.stressIt = async id => {
 
 /* ------------------------------------------------------------------ 人际 */
 LOADERS.people = async () => {
+  renderProposals('person');
   try {
     const d = await api('/api/people');
     $('#peopleList').innerHTML = d.people.length ? d.people.map(p => {

@@ -47,7 +47,7 @@
       <button class="btn primary" id="chatNew">+ 新对话</button>
       <button class="btn" id="chatTone">语气：温和</button>
       <button class="btn" id="chatComfort">共情：自动</button>
-      <button class="btn" id="chatExtract">从对话提炼</button>
+      <button class="btn" id="chatExtract">整理对话</button>
       <button class="btn" id="chatSumm">压缩记忆</button>
       <button class="btn" id="chatWeb">联网：关</button>
       <div class="sp"></div>
@@ -95,6 +95,7 @@
 
   <!-- ============ 事件 ============ -->
   <section class="view" id="v-events">
+    <div id="pendEvents"></div>
     <div class="row" style="margin-bottom:12px">
       <button class="btn primary" id="evAdd">+ 记一条</button>
       <div class="sp"></div>
@@ -109,6 +110,7 @@
 
   <!-- ============ 方向 ============ -->
   <section class="view" id="v-topics">
+    <div id="pendTopics"></div>
     <div class="card">
       <h3>我的方向分布</h3>
       <div id="topicStats"></div>
@@ -122,6 +124,7 @@
 
   <!-- ============ 决策 ============ -->
   <section class="view" id="v-decisions">
+    <div id="pendDecs"></div>
     <div class="row" style="margin-bottom:12px">
       <button class="btn primary" id="decAdd">+ 新决策</button>
       <div class="sp"></div>
@@ -132,6 +135,7 @@
 
   <!-- ============ 人际 ============ -->
   <section class="view" id="v-people">
+    <div id="pendPeople"></div>
     <div class="row" style="margin-bottom:12px">
       <button class="btn primary" id="personAdd">+ 加一个人</button>
       <div class="sp"></div>

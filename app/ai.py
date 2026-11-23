@@ -390,7 +390,53 @@ CHAT_EXTRACT_SCHEMA = """{"memory":[{
   "counter":"一个具体到能今天执行的反制动作",
   "confidence":0.0到1.0
 }],
+"events":[{
+  "on_date":"YYYY-MM-DD，他明确说过的日期才填，没说过就留空字符串",
+  "domain":"学习|工作|人际|健康|财务|其他",
+  "title":"一句事实，15字以内，写发生了什么，不写评价",
+  "my_actions":"他说自己做了什么，没有就留空",
+  "other_response":"对方怎么反应的，没有就留空",
+  "emotion":1到5的整数，他自述的情绪强度，没提就填3,
+  "outcome":"good|bad|neutral",
+  "evidence":[消息id],
+  "quote":"逐字原话片段",
+  "why":"为什么这条值得记成事件（一句话）"
+}],
+"people":[{
+  "name":"他提到的人，用他叫这个名字，不要自己起名",
+  "relation":"同学|朋友|同事|家人|上级|其他",
+  "note":"这个人身上发生的关键事实，一句话",
+  "direction":"give|take",
+  "evidence":[消息id],
+  "quote":"逐字原话片段"
+}],
+"topics":[{
+  "name":"方向名，8字以内",
+  "domain":"学习|工作|其他",
+  "why":"他为什么在这条方向上投入或犹豫（一句话）",
+  "evidence":[消息id],
+  "quote":"逐字原话片段"
+}],
+"decisions":[{
+  "title":"在决定什么，15字以内",
+  "context":"当时的处境，一句话",
+  "options":["出现过的选项"],
+  "chosen":"他最终选了哪个；没选就留空",
+  "rejected":[{"option":"被否掉的选项","reason":"他说的原因；他没说就留空"}],
+  "second_order":["二阶后果，从他的原话里来"],
+  "stop_loss":"他设的止损条件，没提就留空",
+  "reversibility":"easy|hard|unknown",
+  "complete":true或false，见下方判定,
+  "evidence":[消息id],
+  "quote":"逐字原话片段"
+}],
 "skipped":"为什么有些内容你判断不该沉淀（一句话，可为空）"}"""
+
+DECISION_COMPLETE_RULE = """
+关于 decisions 的 complete 字段：只有当对话里**同时**出现了
+「被否掉的选项 + 否掉的理由」和「至少一条二阶后果或止损条件」时，才填 true。
+缺任何一项就填 false —— 这套系统要求决策必须写清否决理由和二阶效应，
+不完整的记录不能入库，用户会去手工补全。宁可不给，也不要凑。"""
 
 
 def extract_from_chat(conn, conv_id, limit=40):
@@ -403,11 +449,27 @@ def extract_from_chat(conn, conv_id, limit=40):
     这不是保守：模型从对话里读出的「你是个怎样的人」只是推测，
     直接当事实会污染之后所有判断。
     """
+    conv = db.one(conn.execute("SELECT * FROM conversations WHERE id=?", (conv_id,)))
+    if not conv:
+        raise RuntimeError("会话不存在")
+    upto = int(conv.get("extracted_upto") or 0)
+
+    # 增量：只整理上次之后的新消息。
+    # 为什么不能整段重跑——模型每次会把同一件事换个说法（标题、引用的消息编号都会变），
+    # 内容比对抓不住，候选会越堆越多。按消息进度切分才是确定的。
     rows = db.rows(conn.execute(
-        "SELECT id,role,content FROM messages WHERE conversation_id=? AND ok=1 "
-        "ORDER BY id DESC LIMIT ?", (conv_id, limit)))
+        "SELECT id,role,content FROM messages WHERE conversation_id=? AND ok=1 AND id>? "
+        "ORDER BY id DESC LIMIT ?", (conv_id, upto, limit)))
     if not rows:
-        raise RuntimeError("这段对话还没有内容可提炼。")
+        # 不是错误，是「没活干」：返回 200 + 一句说明，界面上用中性提示，
+        # 不要用红色报错吓人。
+        if upto:
+            return {"skipped": f"这段对话已经整理到第 {upto} 条消息，后面没有新内容。",
+                    "proposals_total": 0, "proposals": {}, "memory": [], "traits": [],
+                    "dropped": 0, "scanned_messages": 0}
+        return {"skipped": "这段对话还没有内容可整理。", "proposals_total": 0,
+                "proposals": {}, "memory": [], "traits": [], "dropped": 0,
+                "scanned_messages": 0}
     rows = list(reversed(rows))
     valid_ids = {r["id"] for r in rows}
     by_id = {r["id"]: r["content"] for r in rows}
@@ -440,7 +502,9 @@ def extract_from_chat(conn, conv_id, limit=40):
 输出 JSON：
 {CHAT_EXTRACT_SCHEMA}
 
-如果没有值得沉淀的，两个数组都给空。不要为了交差硬凑。"""
+如果没有值得沉淀的，数组都给空。不要为了交差硬凑。
+
+{DECISION_COMPLETE_RULE}"""
 
     text = chat([{"role": "system", "content": SYS_COMMON},
                  {"role": "user", "content": prompt}])
@@ -483,12 +547,111 @@ def extract_from_chat(conn, conv_id, limit=40):
              float(t.get("confidence") or 0.5), f"chat:{conv_id}", db.now()))
         created_t.append({"id": cur.lastrowid, "name": name, "statement": stmt, "evidence": ev})
 
+    # ---- 事件 / 人物 / 方向 / 决策：落进 proposals 暂存区，采纳后才进正式表 ----
+    created_p = {"event": [], "person": [], "topic": [], "decision": []}
+
+    def _grounded(item):
+        """候选必须能被逐字引用支撑，否则当作模型脑补丢掉。"""
+        ev = _clean_ev(item.get("evidence"))
+        q = (item.get("quote") or "").strip()
+        if not ev or not q:
+            return None
+        if not any(q in by_id.get(i, "") for i in ev):
+            return None
+        return ev
+
+    def _prop(kind, payload, ev, note):
+        # 去重：同一段对话反复点「整理」，不该把同一条候选堆成十几份。
+        #
+        # 不能用标题匹配：模型每次会把同一件事换个说法
+        # （「约饭一天未回后约成」vs「约饭一天没回后约成」），标题永远对不上。
+        # 改用证据来源：同类候选如果引用了同一批消息中的任意一条，即视为重复。
+        ev_set = set(ev or [])
+        if ev_set:
+            for row in conn.execute(
+                    "SELECT payload FROM proposals WHERE kind=? AND status IN ('pending','accepted')",
+                    (kind,)).fetchall():
+                try:
+                    old = json.loads(row["payload"] or "{}")
+                except (ValueError, TypeError):
+                    continue
+                if ev_set & set(old.get("_evidence") or []):
+                    return None
+        payload = dict(payload)
+        payload["_evidence"] = list(ev or [])   # 供去重与追溯，入库时不会用到
+        cur = conn.execute(
+            "INSERT INTO proposals(kind,payload,source,status,note,created_at) "
+            "VALUES(?,?,?,'pending',?,?)",
+            (kind, json.dumps(payload, ensure_ascii=False), f"chat:{conv_id}",
+             (note or "")[:300], db.now()))
+        return cur.lastrowid
+
+    for e in (data.get("events") or []):
+        title = (e.get("title") or "").strip()
+        ev = _grounded(e)
+        if len(title) < 4 or not ev:
+            dropped += 1
+            continue
+        payload = {k: e.get(k) for k in
+                   ("on_date", "domain", "title", "my_actions", "other_response",
+                    "emotion", "outcome") if e.get(k) not in (None, "")}
+        payload.setdefault("title", title)
+        pid = _prop("event", payload, ev, e.get("why") or "对话里说到的具体发生的事")
+        if pid:
+            created_p["event"].append({"id": pid, "title": title, "on_date": payload.get("on_date", "")})
+
+    for p_ in (data.get("people") or []):
+        name = (p_.get("name") or "").strip()
+        ev = _grounded(p_)
+        if not name or not ev:
+            dropped += 1
+            continue
+        payload = {"name": name[:20], "relation": p_.get("relation") or "",
+                   "note": p_.get("note") or "", "direction": p_.get("direction") or "give"}
+        pid = _prop("person", payload, ev, p_.get("note") or "")
+        if pid:
+            created_p["person"].append({"id": pid, "name": name})
+
+    for t_ in (data.get("topics") or []):
+        name = (t_.get("name") or "").strip()
+        ev = _grounded(t_)
+        if not name or not ev:
+            dropped += 1
+            continue
+        payload = {"name": name[:30], "domain": t_.get("domain") or "", "why": t_.get("why") or ""}
+        pid = _prop("topic", payload, ev, t_.get("why") or "")
+        if pid:
+            created_p["topic"].append({"id": pid, "name": name})
+
+    for d_ in (data.get("decisions") or []):
+        title = (d_.get("title") or "").strip()
+        ev = _grounded(d_)
+        if not title or not ev:
+            dropped += 1
+            continue
+        complete = bool(d_.get("complete")) and bool(d_.get("chosen"))
+        payload = {k: d_.get(k) for k in
+                   ("title", "context", "options", "chosen", "rejected", "second_order",
+                    "stop_loss", "reversibility") if d_.get(k) not in (None, "", [])}
+        payload["title"] = title
+        payload["_complete"] = complete
+        note = "对话里做出的决定" if complete else "⚠ 缺否决理由或二阶效应，采纳时会被拒绝，需手工补全"
+        pid = _prop("decision", payload, ev, note)
+        if pid:
+            created_p["decision"].append({"id": pid, "title": title, "complete": complete})
+
+    conn.execute("UPDATE conversations SET extracted_upto=? WHERE id=?",
+                 (max(r["id"] for r in rows), conv_id))
     conn.commit()
     _save_report(conn, "extract-chat", {"conversation_id": conv_id, "messages": len(rows)},
-                 {"memory": created_m, "traits": created_t, "dropped": dropped})
-    return {"memory": created_m, "traits": created_t, "dropped": dropped,
+                 {"memory": created_m, "traits": created_t, "proposals": created_p,
+                  "dropped": dropped})
+    total_p = sum(len(v) for v in created_p.values())
+    return {"memory": created_m, "traits": created_t, "proposals": created_p,
+            "proposals_total": total_p, "dropped": dropped,
             "scanned_messages": len(rows),
-            "note": "提炼结果都是 draft 状态，不会进入上下文；去「记忆」和「画像」里逐条确认。"}
+            "note": ("提炼结果都是待确认状态：记忆/画像不会进上下文，"
+                     "事件/人物/方向/决策在各自页面顶部等着你采纳。")}
 
 
 # ---------------------------------------------------------------- 1. 性格归因
