@@ -16,7 +16,7 @@
 import json
 import re
 
-from . import ai, comfort, db, knowledge, persona, phrasing, skills, tone, websearch
+from . import ai, comfort, db, evidence, knowledge, lexicon, persona, phrasing, skills, tone, websearch
 
 CHAR_BUDGET = 26000      # 单次上下文总字符上限（含历史，不含回复）
 TURN_KEEP = 16           # 默认保留最近多少条消息原话
@@ -33,8 +33,11 @@ SYS = (
     "规则：\n"
     "1. 凡是引用他过去的事，必须标注编号：事件用 [事件#12]，决策用 [决策#3]，"
     "长期记忆用 [记忆#5]，画像用 [画像#2]。编号必须来自下面给你的材料，绝不许编。\n"
-    "2. 材料里没有的，就说「记录里没有这条」，不要推测成事实。\n"
-    "3. 区分三件事：他记录的事实、你基于事实的推断、纯粹的假设。混着说等于撒谎。\n"
+    "2. 关于他**过去**的事实，材料里没有就说「记录里没有这条」，不要推测成事实。"
+    "但他**本轮刚说的**就是材料本身——不许因为「库里没有」而否定他刚说的事，"
+    "「记录没有」不等于「事情没发生」。\n"
+    "3. 区分三件事：他说的、你推断的、纯假设。混着说等于撒谎。"
+    "但分清是为了标清楚，不是为了盘问他——详见下面的【证据立场】。\n"
     "4. 结论要落到可执行动作，且带阈值或时间点。\n"
     "5. 中文回答，不要长篇大论，但你若发现矛盾必须直说。\n"
     "6. 分析社会行为与心理机制时，优先用下面【本地知识库】里的条目，并写 [理论#编号]。"
@@ -166,6 +169,25 @@ def build_context(conn, conv, exclude_id=None, recall_query=None):
     tblock = tone.block(conv.get("tone") or "warm")
     parts.append("\n=== 语气 ===\n" + tblock)
     meta["tone"] = (conv.get("tone") or "warm")
+
+    # 5e2b. 背景参照：他说一件事时，先给「这类情形通常是什么样」的背景
+    # 只在联网开启时取。拿不到就跳过，绝不能因此不回答。
+    if (conv.get("web") or 0) and q and len(q.strip()) >= 4:
+        try:
+            # 不能用整句话去查维基：实测「昨天下午我去找她，想把话说清楚」
+            # 会命中「林宅血案 / 林志颖」（因为姓林）。只取词表认得的短概念。
+            zh_kw = lexicon.life_terms(q, limit=2) or lexicon.zh_terms(q, limit=2)
+            en_kw = lexicon.life_en(zh_kw)
+            bg_rows = websearch.background(" ".join(zh_kw), " ".join(en_kw)) if zh_kw else []
+            bg = websearch.background_block(bg_rows)
+            if bg:
+                parts.append(bg)
+                meta["background"] = [r["title"] for r in bg_rows]
+        except Exception as e:      # noqa: BLE001 - 背景是加分项，失败不影响回答
+            meta["background_error"] = _clip(str(e), 120)
+
+    # 5e3. 证据立场：他的自述是最好证据，不许反复盘问
+    parts.append("\n=== 证据立场 ===\n" + evidence.block())
 
     # 5f. 话术层：他在问「这句话该怎么说」时，按情境给可照说的原话
     phr_block, phr_meta = phrasing.instruction(q)
@@ -299,6 +321,8 @@ def send(conn, conv_id, user_text, skill=None):
                         "comfort_signals": (meta.get("comfort") or {}).get("signals", []),
                         "phrasing_ask": bool((meta.get("phrasing") or {}).get("ask")),
                         "phrasing_kind": (meta.get("phrasing") or {}).get("kind", ""),
+                        "background": meta.get("background") or [],
+                        "background_error": meta.get("background_error") or "",
                         "phrasing_ratio": [(meta.get("phrasing") or {}).get("warm", 0),
                                            (meta.get("phrasing") or {}).get("direct", 0)],
                         "web_error": meta.get("web_error") or ""}}

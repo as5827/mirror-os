@@ -152,3 +152,32 @@ def en_terms(text, limit=3):
 
 def size():
     return len(PAIRS)
+
+# 常用生活词（补在学术词之后，用于维基「背景参照」的查询词提取）
+LIFE = [
+    ("表白", "confession"), ("暗恋", "unrequited love"), ("单恋", "unrequited love"),
+    ("失恋", "breakup"), ("暧昧", "ambiguous relationship"), ("追求", "courtship"),
+    ("拒绝", "rejection"), ("冷暴力", "silent treatment"), ("边界", "personal boundaries"),
+    ("讨好", "people pleasing"), ("内耗", "rumination"), ("焦虑", "anxiety"),
+    ("失眠", "insomnia"), ("拖延", "procrastination"), ("孤独", "loneliness"),
+    ("自责", "self-blame"), ("羞耻", "shame"), ("嫉妒", "jealousy"),
+    ("信任", "trust"), ("依赖", "codependency"), ("冷落", "social rejection"),
+    ("朋友", "friendship"), ("同事", "coworker"), ("上级", "supervisor"),
+    ("父母", "parent"), ("亲密关系", "intimate relationship"), ("婚姻", "marriage"),
+    ("分手", "breakup"), ("復合", "reconciliation"), ("求職", "job hunting"),
+    ("辞职", "resignation"), ("考研", "postgraduate entrance exam"),
+    ("创业", "entrepreneurship"), ("副业", "side job"), ("倦怠", "burnout"),
+]
+
+
+def life_terms(text, limit=2):
+    """从话里挑出生活类概念词，给「背景参照」当查询用。"""
+    t = (text or "").replace(" ", "")
+    hits = [zh for zh, _en in LIFE if zh in t]
+    return hits[:limit]
+
+
+def life_en(zh_words):
+    """把中文生活词翻成英文，用于英文维基。"""
+    table = {zh: en for zh, en in LIFE}
+    return [table[w] for w in zh_words if w in table]

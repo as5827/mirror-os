@@ -594,3 +594,113 @@ def probe():
     _probe_cache["ts"] = now
     _probe_cache["data"] = res
     return res
+
+# ---------------------------------------------------------------- 背景参照（维基百科）
+# 用途：他说一件事时，先给一点「这个情形在人类经验里长什么样」的背景，
+# 再基于他的叙述做分析。注意它是常识背景，不是「和你一样的案例」的证据。
+# 网络实测：维基直连不通、走系统代理 200；OpenAlex 反过来直连就通。
+# 所以这里单独做一条「多路重试」的请求，不直接复用 _opener()。
+WIKI_API = "https://{lang}.wikipedia.org/w/api.php"
+
+
+def _wiki_get(url, timeout=12):
+    """先按 MIRROR_PROXY，再直连，最后试本机常见代理端口。"""
+    attempts = []
+    proxy = os.environ.get("MIRROR_PROXY", "").strip()
+    if proxy:
+        attempts.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    attempts.append(urllib.request.ProxyHandler({}))
+    attempts.append(urllib.request.ProxyHandler(
+        {"http": "http://127.0.0.1:7897", "https": "http://127.0.0.1:7897"}))
+    last = None
+    for handler in attempts:
+        try:
+            op = urllib.request.build_opener()
+            op.add_handler(handler)
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with op.open(req, timeout=timeout) as r:
+                return r.read().decode("utf-8", "ignore")
+        except Exception as e:      # noqa: BLE001 - 多路重试，最后统一报
+            last = e
+    raise last or RuntimeError("wikipedia 不可达")
+
+
+def wikipedia(query, lang="zh", limit=3):
+    """按关键词取维基条目摘要。返回 [{title, extract, url, lang}]。"""
+    q = (query or "").strip()
+    if len(q) < 2:
+        return []
+    params = urllib.parse.urlencode({
+        "action": "query", "generator": "search", "gsrsearch": q,
+        "gsrlimit": limit, "prop": "extracts", "exintro": 1,
+        "explaintext": 1, "format": "json", "utf8": 1,
+    })
+    data = _wiki_get(WIKI_API.format(lang=lang) + "?" + params)
+    try:
+        j = json.loads(data)
+    except ValueError:
+        return []
+    pages = ((j.get("query") or {}).get("pages") or {})
+    out = []
+    for p in pages.values():
+        extract = (p.get("extract") or "").strip()
+        if len(extract) < 40:
+            continue
+        # 过滤噪声：维基搜索常把同名影视剧、消歧义页排前面
+        junk = ("电视剧", "電視劇", "电影", "電影", "综艺", "綜藝", "小说", "小說",
+                "is a 20", "is a Chinese", "TV series", "film", "may refer to")
+        if any(k in extract[:120] or k in (p.get("title") or "") for k in junk):
+            continue
+        out.append({
+            "title": p.get("title") or "",
+            "extract": extract[:700],
+            "url": f"https://{lang}.wikipedia.org/wiki/" + urllib.parse.quote((p.get("title") or "").replace(" ", "_")),
+            "lang": lang,
+        })
+    # 相关性强校验：标题必须和查询有词面交集。
+    # 不做这一步会出洋相——实测用「昨天下午我去找她」查，「林宅血案」「林志颖」
+    # 都因为一个「林」字被命中。宁可没有背景，也不要塞垃圾。
+    qt = [w for w in re.split(r"[\s，。、；：！？,.;:!?]+", q) if len(w) >= 2]
+    kept = []
+    for it in out:
+        title = it["title"]
+        hit = any(w in title or title in w for w in qt) or any(
+            len(w) >= 2 and w in q for w in [title])
+        if hit:
+            kept.append(it)
+    # 按 index 排序（MediaWiki 返回顺序不稳定）
+    kept.sort(key=lambda x: pages_order(pages, x["title"]))
+    return kept[:limit]
+
+
+def pages_order(pages, title):
+    for p in pages.values():
+        if p.get("title") == title:
+            return p.get("index", 99)
+    return 99
+
+
+def background(query_zh, query_en=""):
+    """取中英文维基背景，各 2 条。拿不到就返回空，不抛错。"""
+    rows = []
+    for lang, q in (("zh", query_zh), ("en", query_en)):
+        if not q:
+            continue
+        try:
+            rows.extend(wikipedia(q, lang=lang, limit=2))
+        except Exception:      # noqa: BLE001 - 背景拿不到不该挡住回答
+            continue
+    return rows
+
+
+def background_block(rows):
+    """背景参照块。刻意不给编号：它不是可引用的证据。"""
+    if not rows:
+        return ""
+    out = ["\n【背景参照（维基百科摘要；常识背景，不是同行评审证据，也不是「和你一样」的案例）】"]
+    for r in rows:
+        out.append(f"- 《{r['title']}》：{r['extract']}")
+        out.append(f"  {r['url']}")
+    out.append("用法限制：只能用来解释「这类情形通常是什么样」，"
+               "不能说成「有人也这样」或「研究证明你这种情况」。")
+    return "\n".join(out)

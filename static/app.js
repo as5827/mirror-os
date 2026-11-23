@@ -257,7 +257,8 @@ async function sendMsg() {
       + (c.refs ? ` · 联网文献${c.refs}「${c.web_query}」` : '')
       + (c.web_skipped ? ` · ${c.web_skipped}` : '')
       + (c.web_error ? ` · 联网失败(${c.web_error})` : '')
-      + (c.comfort_applied && c.comfort_applied !== 'none' ? ` · 体例:${c.comfort_applied}${c.comfort_level ? c.comfort_level : ''}` : '');
+      + (c.comfort_applied && c.comfort_applied !== 'none' ? ` · 体例:${c.comfort_applied}${c.comfort_level ? c.comfort_level : ''}` : '')
+      + ((c.background || []).length ? ` · 背景参照${c.background.length}则(${c.background.join('/')})` : '');
     if ((r.bad_refs || []).length) {
       toast(`AI 引用了 ${r.bad_refs.length} 个不存在的编号，已标红——它在编证据`, 'err');
     }
