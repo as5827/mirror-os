@@ -23,6 +23,7 @@ _shots/
 _shots_preview/
 *.png
 !static/icon-*.png
+!docs/*.png
 !mirror.ico
 
 # 图标生成产物里的本地副本
