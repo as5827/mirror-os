@@ -99,7 +99,8 @@ def call(method, path, body=None, expect=200, label=""):
     req = urllib.request.Request(BASE + path, data=data, method=method,
                                  headers={"Content-Type": "application/json"})
     try:
-        with op.open(req, timeout=30) as r:
+        # 聊天接口要真调模型，30 秒不够（会 TypeError 变成超时失败）
+        with op.open(req, timeout=180) as r:
             code, raw = r.status, r.read()
     except urllib.error.HTTPError as e:
         code, raw = e.code, e.read()

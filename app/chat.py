@@ -19,7 +19,7 @@ import re
 from . import ai, comfort, db, evidence, knowledge, lexicon, persona, phrasing, skills, tone, websearch
 
 CHAR_BUDGET = 26000      # 单次上下文总字符上限（含历史，不含回复）
-TURN_KEEP = 40           # 保留最近多少条原话。原来是 16，长对话会丢中间一大段
+TURN_KEEP = 60           # 条数上限（真正的约束是 CHAR_BUDGET，这里只是防呆）
 PER_MSG_CAP = 1400       # 单条历史消息最多注入多少字
 
 SYS = (
@@ -54,6 +54,113 @@ SYS = (
 def _clip(s, n):
     s = str(s or "")
     return s if len(s) <= n else s[:n] + "…"
+
+
+
+# 中文没有空格，按「整句片段」分词去检索等于不检索。
+# 这里做三层：词表命中（高精度）> 数字/英文 > 二元组（低精度，靠相关性门槛过滤）。
+_RECALL_STOP = set("的了呢吗吧啊呀哦嗯是在有和就都也要我你他她它这那什么怎为样个些点次中上后前里到还只没不很太会说做想")
+
+def recall_terms(text, limit=8):
+    """从一句话里抽出可用于检索的词。"""
+    s = (text or "").strip()
+    if not s:
+        return []
+    out = []
+
+    def push(w):
+        if w and w not in out and w not in _RECALL_STOP:
+            out.append(w)
+
+    # 1. 词表里认得的（表白/工资/创业/拖延……），精度最高
+    try:
+        from . import lexicon
+        for w in lexicon.life_terms(s, limit=4) + lexicon.zh_terms(s, limit=4):
+            push(w)
+    except Exception:      # noqa: BLE001
+        pass
+    # 2. 数字与英文（600、HBase、PPT……）
+    for w in re.findall(r"[A-Za-z][A-Za-z0-9_+#.\-]{1,20}|\d{2,}", s):
+        push(w)
+    # 3. 二元组兜底：去掉停用字后两两成词
+    cjk = re.sub(r"[^\u4e00-\u9fa5]", " ", s)
+    for chunk in cjk.split():
+        for i in range(len(chunk) - 1):
+            bg = chunk[i:i + 2]
+            if bg[0] in _RECALL_STOP or bg[1] in _RECALL_STOP:
+                continue
+            push(bg)
+            if len(out) >= limit:
+                return out[:limit]
+    return out[:limit]
+
+
+def recall_older_turns(conn, conv_id, query, before_id, limit=3):
+    """在这次对话里，把窗口之外、但和本轮问题相关的旧原话找回来。
+
+    为什么需要：窗口（TURN_KEEP）之外的消息，模型只能通过滚动摘要看到，
+    而摘要是压缩过的，细节全丢了。他问「上次说的那个 600 块」时，
+    如果那轮在原话窗口外，模型就只能瞎猜。
+    返回 [(user_msg_id, 用户原话, 紧随其后的助手回复开头)]。
+    """
+    if not query or not before_id:
+        return []
+    terms = recall_terms(query)
+    if not terms:
+        return []
+    ids = []
+    long_terms = [x for x in terms if len(x) >= 3][:5]
+    if long_terms:
+        m = " OR ".join('"%s"' % x.replace('"', "") for x in long_terms)
+        try:
+            ids += [r[0] for r in conn.execute(
+                "SELECT rowid FROM messages_fts WHERE messages_fts MATCH ? LIMIT 40", (m,))]
+        except Exception:      # noqa: BLE001 - FTS 语法异常就退到 LIKE
+            pass
+    short = [x for x in terms if len(x) < 3][:4]
+    for x in short:
+        try:
+            ids += [r[0] for r in conn.execute(
+                "SELECT id FROM messages WHERE conversation_id=? AND id<? AND ok=1 "
+                "AND content LIKE ? ORDER BY id DESC LIMIT 20",
+                (conv_id, before_id, f"%{x}%"))]
+        except Exception:      # noqa: BLE001
+            continue
+    if not ids:
+        return []
+    seen = set()
+    scored = []
+    # 阈值 1：超长文档已被长度过滤挡掉，剩下的短消息命中一个词就够；
+    # 实测这段对话里 34 条短消息每条通常只命中 1 个词，设成 2 会全部漏掉。
+    need = 1
+    for mid in ids:
+        if mid in seen:
+            continue
+        seen.add(mid)
+        row = db.one(conn.execute(
+            "SELECT id,role,content FROM messages WHERE id=? AND conversation_id=? "
+            "AND ok=1 AND id<?", (mid, conv_id, before_id)))
+        if not row or row["role"] != "user":
+            continue
+        body = row["content"] or ""
+        # 跳过超长消息：他往对话里贴过整篇画像/事实清单，几万字的那种
+        # 几乎命中任何检索词，捞回来只会挤掉真正有用的对话轮次。
+        if len(body) > 500:
+            continue
+        hits = sum(1 for x in terms if x in body)
+        if hits < need:
+            continue
+        # 按命中密度排序：命中的词占长度的比例，短消息里命中更有信息量
+        density = hits / max(len(body) / 100.0, 1.0)
+        scored.append((density, hits, row["id"], body))
+    scored.sort(key=lambda x: (-x[0], -x[1], -x[2]))
+    picked = []
+    for _d, _h, mid, body in scored[:limit]:
+        nxt = db.one(conn.execute(
+            "SELECT content FROM messages WHERE conversation_id=? AND id>? AND role='assistant' "
+            "AND ok=1 ORDER BY id LIMIT 1", (conv_id, mid)))
+        picked.append((mid, body, (nxt["content"] if nxt else "")))
+    return picked
 
 
 def build_context(conn, conv, exclude_id=None, recall_query=None):
@@ -113,6 +220,21 @@ def build_context(conn, conv, exclude_id=None, recall_query=None):
     sql += " ORDER BY id DESC LIMIT ?"
     args.append(TURN_KEEP)
     hist = list(reversed(db.rows(conn.execute(sql, args))))
+
+    # 5a2. 自动召回：窗口之外、但和本轮相关的旧原话
+    # 这是「记忆度」的关键——摘要只有骨架，原话才有细节。
+    try:
+        _oldest = hist[0]["id"] if hist else None
+        _rc = recall_older_turns(conn, conv["id"], recall_query or "", _oldest, limit=3) if _oldest else []
+        if _rc:
+            parts.append("\n【这次对话前面谈过的（原话摘录，供你串联上下文）】")
+            for mid, u_txt, a_txt in _rc:
+                parts.append(f"- [#{mid} 他]: {_clip(u_txt, 300)}")
+                if a_txt:
+                    parts.append(f"  （当时你的结论开头）：{_clip(a_txt, 200)}")
+            meta["recalled_turns"] = [m[0] for m in _rc]
+    except Exception:      # noqa: BLE001 - 召回失败就当没有，不影响本轮
+        pass
 
     # 缺口提示：摘要之后、窗口之前如果还有消息，模型是看不到的。
     # 不告诉它，它会默认「上下文是连续的」，于是把断掉的因果接错——这就是他说
@@ -362,6 +484,8 @@ def send(conn, conv_id, user_text, skill=None):
                         "comfort_signals": (meta.get("comfort") or {}).get("signals", []),
                         "phrasing_ask": bool((meta.get("phrasing") or {}).get("ask")),
                         "phrasing_kind": (meta.get("phrasing") or {}).get("kind", ""),
+                        "recalled": len(meta.get("recalled_turns") or []),
+                        "gap": meta.get("gap_messages") or 0,
                         "background": meta.get("background") or [],
                         "background_error": meta.get("background_error") or "",
                         "phrasing_ratio": [(meta.get("phrasing") or {}).get("warm", 0),
