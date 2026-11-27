@@ -279,24 +279,30 @@ async function sendMsg() {
 $('#chatNew').onclick = newConv;
 $('#chatSend').onclick = sendMsg;
 
+const TONE_LABEL = { warm: '温和', nvc: '非暴力', strict: '直接' };
+const TONE_ORDER = ['warm', 'nvc', 'strict'];
+
 function paintToneBtn() {
   const b = $('#chatTone');
   if (!b) return;
-  const warm = (CHAT.tone || 'warm') !== 'strict';
-  b.textContent = '语气：' + (warm ? '温和' : '直接');
-  b.className = 'btn' + (warm ? ' primary' : '');
+  const cur = TONE_LABEL[CHAT.tone] ? CHAT.tone : 'warm';
+  b.textContent = '语气：' + TONE_LABEL[cur];
+  b.className = 'btn' + (cur === 'strict' ? '' : ' primary');
 }
 
 $('#chatTone').onclick = async () => {
   if (!CHAT.conv) { toast('先开一个对话'); return; }
-  const next = (CHAT.tone || 'warm') === 'strict' ? 'warm' : 'strict';
+  const cur = TONE_LABEL[CHAT.tone] ? CHAT.tone : 'warm';
+  const next = TONE_ORDER[(TONE_ORDER.indexOf(cur) + 1) % TONE_ORDER.length];
   try {
     const r = await api(`/api/conversations/${CHAT.conv}/tone`, { mode: next });
     CHAT.tone = r.mode;
     paintToneBtn();
-    toast(r.mode === 'warm'
-      ? '温和：判断落在事上，不落在人身上；术语说人话'
-      : '直接：判词式短句，不铺垫', 'ok');
+    toast({
+      warm: '温和：判断落在事上，不落在人身上',
+      nvc: '非暴力沟通：观察 → 影响 → 需要 → 请求，不贴标签不命令',
+      strict: '直接：判词式短句，不铺垫',
+    }[r.mode] || r.mode, 'ok');
   } catch (e) { toast(e.message, 'err'); }
 };
 

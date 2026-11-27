@@ -16,7 +16,7 @@
 import json
 import re
 
-from . import ai, comfort, db, evidence, knowledge, lexicon, persona, phrasing, skills, tone, websearch
+from . import ai, comfort, db, evidence, knowledge, lexicon, nvc, persona, phrasing, skills, tone, websearch
 
 CHAR_BUDGET = 26000      # 单次上下文总字符上限（含历史，不含回复）
 TURN_KEEP = 60           # 条数上限（真正的约束是 CHAR_BUDGET，这里只是防呆）
@@ -305,9 +305,10 @@ def build_context(conn, conv, exclude_id=None, recall_query=None):
     meta["comfort"] = cmeta
 
     # 5e2. 语气层：同一套判断，用对事不对人的方式说
-    tblock = tone.block(conv.get("tone") or "warm")
+    _tone = (conv.get("tone") or "warm").strip()
+    tblock = nvc.NVC + "\n" + nvc.BASE if _tone == "nvc" else tone.block(_tone)
     parts.append("\n=== 语气 ===\n" + tblock)
-    meta["tone"] = (conv.get("tone") or "warm")
+    meta["tone"] = _tone
 
     # 5e2b. 背景参照：他说一件事时，先给「这类情形通常是什么样」的背景
     # 只在联网开启时取。拿不到就跳过，绝不能因此不回答。
@@ -464,6 +465,14 @@ def send(conn, conv_id, user_text, skill=None):
         auto_hint = autopilot.tick(conn, conv_id)
     except Exception:          # noqa: BLE001 - 自动整理失败不能影响聊天
         auto_hint = ""
+
+    # 即时记忆：这一轮他说的稳定事实立刻进草稿，不等攒够阈值。
+    # 后台线程 + 只写 draft（不进上下文），仍然要他确认。
+    try:
+        from . import live
+        live.tick(conn, conv_id, text, uid)
+    except Exception:          # noqa: BLE001 - 即时记忆失败不能影响聊天
+        pass
 
     return {"message_id": c2.lastrowid, "user_message_id": uid, "reply": reply,"auto": auto_hint,
             "refs": good, "bad_refs": bad,

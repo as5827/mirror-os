@@ -326,6 +326,7 @@ CREATE INDEX IF NOT EXISTS ix_ref_theory ON reference(theory_id);
 
 DEFAULT_RULES = [
     # 自动整理阈值：累计多少条「未整理」的消息后，后台自动提炼一次
+    ("live_memory", "即时记忆", "每轮对话后立刻提炼稳定事实（只产草稿，不自动采纳）", 1, "开关", 1),
     ("auto_organize_every", "自动整理阈值", "消息攒到这么多条就后台自动提炼一次（只产候选，不写正式表）", 30, "条", 1),
     ("auto_direction_every", "方向草稿阈值", "消息累计到这么多条后，自动出一份方向草稿", 60, "条", 1),
     ("mainline_cap", "并行主线上限", "同时活跃的主线方向超过此数，强制封存", 3, "个", 1),

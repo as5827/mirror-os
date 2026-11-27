@@ -709,8 +709,8 @@ def _conv_web(h, ctx, cid):
 def _conv_tone(h, ctx, cid):
     """设置语气：warm（温和对事，默认）/ strict（直接判词式）。"""
     mode = _s(ctx["body"].get("mode"), "warm")
-    if mode not in ("warm", "strict"):
-        raise Err("只能是 warm / strict")
+    if mode not in ("warm", "strict", "nvc"):
+        raise Err("只能是 warm / strict / nvc")
     ctx["conn"].execute("UPDATE conversations SET tone=? WHERE id=?", (mode, _int(cid)))
     ctx["conn"].commit()
     return {"ok": True, "mode": mode}
