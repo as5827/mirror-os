@@ -311,12 +311,22 @@ def ensure_seeded(conn):
     return added
 
 
-def catalog_block(conn, limit=60):
-    """紧凑索引：只给名称 + 适用条件，让模型知道库里有什么。"""
+def catalog_block(conn, limit=60, compact=True):
+    """紧凑索引：让模型知道库里有什么，能引用 [理论#编号]。
+
+    compact=True 时只列「编号 + 名称」，不列适用条件。
+    为什么要砍：实测 37 条带适用条件的索引是 1092 字，而每轮 system prompt 总共
+    才 7.4k 字——光这一块就占了 15%，而且绝大多数轮次根本用不到具体条目。
+    真要用的那几条，会由 match() 单独完整注入，索引只是「目录」。
+    """
     rows = db.rows(conn.execute(
         "SELECT id,name,applies FROM theory WHERE enabled=1 ORDER BY field,id LIMIT ?", (limit,)))
     if not rows:
         return "", []
+    if compact:
+        body = "；".join(f"#{r['id']}{r['name']}" for r in rows)
+        lines = ["【本地知识库目录（要引用就写 [理论#编号]；索引里有的别说没有）】", body]
+        return "\n".join(lines), [r["id"] for r in rows]
     lines = ["【本地知识库（只列名称与适用条件；你要用它时必须写 [理论#编号]）】"]
     for r in rows:
         lines.append(f"- 理论#{r['id']} {r['name']}：{r['applies']}")

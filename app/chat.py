@@ -19,7 +19,7 @@ import re
 from . import ai, comfort, db, evidence, knowledge, lexicon, persona, phrasing, skills, tone, websearch
 
 CHAR_BUDGET = 26000      # 单次上下文总字符上限（含历史，不含回复）
-TURN_KEEP = 16           # 默认保留最近多少条消息原话
+TURN_KEEP = 40           # 保留最近多少条原话。原来是 16，长对话会丢中间一大段
 PER_MSG_CAP = 1400       # 单条历史消息最多注入多少字
 
 SYS = (
@@ -113,6 +113,23 @@ def build_context(conn, conv, exclude_id=None, recall_query=None):
     sql += " ORDER BY id DESC LIMIT ?"
     args.append(TURN_KEEP)
     hist = list(reversed(db.rows(conn.execute(sql, args))))
+
+    # 缺口提示：摘要之后、窗口之前如果还有消息，模型是看不到的。
+    # 不告诉它，它会默认「上下文是连续的」，于是把断掉的因果接错——这就是他说
+    # 「上下文紊乱」的真实成因（实测：86 条消息的会话，中间有 40 条从未进过上下文）。
+    try:
+        oldest_in_window = hist[0]["id"] if hist else None
+        if oldest_in_window:
+            gap_sql = ("SELECT COUNT(*) FROM messages WHERE conversation_id=? AND ok=1 "
+                       "AND id>? AND id<?")
+            gap_args = [conv["id"], last_cut or 0, oldest_in_window]
+            gap = conn.execute(gap_sql, gap_args).fetchone()[0]
+            if gap > 0:
+                parts.append(f"\n【注意：这段对话里有 {gap} 条较早的消息没有放进本次上下文，"
+                             f"你对那部分内容不知情。涉及那段时间的事，先问，不要假设。】")
+                meta["gap_messages"] = gap
+    except Exception:      # noqa: BLE001 - 缺口提示是加分项，取不到就算了
+        pass
 
     # 5b. 检索：用最近几条用户消息当查询，找回更早的相关事件
     q = recall_query or " ".join([m["content"] for m in hist if m["role"] == "user"][-2:]) or \
@@ -273,6 +290,21 @@ def send(conn, conv_id, user_text, skill=None):
 
     # 用户消息已经落库（下面 build_context 会读到它），所以用 exclude_id 排除，
     # 再手动 append 一次——不是两次。之前漏了排除，模型会看到同一句话两遍。
+    # 上下文缺口自动补压缩：
+    # build_context 只带「摘要之后 + 最近 TURN_KEEP 条」，中间那段模型看不见。
+    # 缺口超过窗口就压一次摘要（summarize 是同步的，所以只在必要时触发）。
+    try:
+        _cut = conn.execute(
+            "SELECT COALESCE(MAX(upto_message_id),0) FROM summaries WHERE conversation_id=?",
+            (conv_id,)).fetchone()[0] or 0
+        _uncovered = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE conversation_id=? AND ok=1 AND id>?",
+            (conv_id, _cut)).fetchone()[0]
+        if _uncovered > TURN_KEEP + 6:
+            summarize(conn, conv_id, keep_recent=14)
+    except Exception:      # noqa: BLE001 - 压缩失败就用现有上下文，不影响回复
+        pass
+
     msgs, meta = build_context(conn, conv, exclude_id=uid, recall_query=text)
     msgs.append({"role": "user", "content": text})
     # build_context 里的字数/轮次是在追加当前这句之前算的，这里补上，

@@ -871,3 +871,52 @@ python seed_demo.py wipe   # 清空（正式使用前务必执行）
 右上「现在生成」可以不等阈值直接要一份。
 
 **它是草稿，不是判决**——方向要不要押仍然由你定。
+
+### 换模型：任何 OpenAI 兼容服务都能接
+
+默认走 DeepSeek，但代码里没有写死。改 `.env` 就行，不动代码：
+
+```bash
+# 方式一：用预设名
+LLM_PROVIDER=qwen          # deepseek / qwen / glm / kimi / siliconflow / ollama
+
+# 方式二：直接指定（优先级更高）
+LLM_BASE_URL=https://api.siliconflow.cn/v1
+LLM_MODEL=Qwen/Qwen2.5-72B-Instruct
+LLM_API_KEY=sk-xxx
+
+# 本地开源模型
+ollama pull qwen2.5:14b
+LLM_BASE_URL=http://127.0.0.1:11434/v1
+LLM_MODEL=qwen2.5:14b
+LLM_API_KEY=ollama
+```
+
+支持任何遵循 `/chat/completions` 协议的服务：通义千问、智谱 GLM、月之暗面、硅基流动、
+vLLM、LM Studio、Ollama。切完建议先跑 `payloadcheck.py` 和 `deploycheck.py`。
+
+### 上下文体检：它到底看到了什么
+
+「上下文紊乱 / 语言理解不到位」这类抱怨，很多时候不是模型的锅。这个项目自带体检：
+
+```bash
+python devctx.py     # 打印 system prompt 各块大小、进了几条原话、有没有被截断
+```
+
+实测一轮的构成（86 条消息的会话）：
+
+| 部分 | 字数 | 说明 |
+|---|---|---|
+| 对话原话 | 14 条 | 摘要之后的全部消息 |
+| 滚动摘要 | 606 | 覆盖此前 72 条消息 |
+| 语气 + 证据立场 + 体例 | ~1900 | 每轮常驻 |
+| 知识库目录 | 387 | 原先 1361（带适用条件），已压到只列名称 |
+
+**修过的两件事**：
+
+1. **知识库索引原来每轮注入 1361 字**（37 条带适用条件），而 system prompt 才 7.4k。
+   现在只列「编号 + 名称」共 387 字，真要用的条目由匹配器单独完整注入——省了 72%。
+2. **摘要从不自动更新**：`maybe_auto_summarize` 定义了却没人调用，所以长期对话的摘要是旧的。
+   现在缺口超过窗口就自动压一次（同步，只在必要时触发）。
+
+另外 `TURN_KEEP` 从 16 提到 40：以前窗口太窄，长对话只能看最近 16 条。

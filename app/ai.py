@@ -14,8 +14,35 @@ import urllib.request
 
 from . import db, persona
 
-API_URL = "https://api.deepseek.com/chat/completions"
-MODEL = "deepseek-chat"
+# ---------------------------------------------------------------- 模型可切换
+# 默认走 DeepSeek，但任何「OpenAI 兼容」的服务都能接：
+#   通义千问（dashscope compatible-mode）、智谱 GLM、月之暗面 Kimi、
+#   硅基流动 SiliconFlow、本地 Ollama / vLLM / LM Studio……
+# 只改 .env，不用动代码：
+#   LLM_BASE_URL=https://api.siliconflow.cn/v1      # 服务地址（不带 /chat/completions）
+#   LLM_MODEL=Qwen/Qwen2.5-72B-Instruct
+#   LLM_API_KEY=sk-xxx                              # 不给就用 DEEPSEEK_API_KEY
+# 本地 Ollama 示例：LLM_BASE_URL=http://127.0.0.1:11434/v1  LLM_MODEL=qwen2.5:14b  LLM_API_KEY=ollama
+PRESETS = {
+    "deepseek": ("https://api.deepseek.com", "deepseek-chat"),
+    "qwen": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
+    "glm": ("https://open.bigmodel.cn/api/paas/v4", "glm-4-plus"),
+    "kimi": ("https://api.moonshot.cn/v1", "moonshot-v1-32k"),
+    "siliconflow": ("https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-72B-Instruct"),
+    "ollama": ("http://127.0.0.1:11434/v1", "qwen2.5:14b"),
+}
+
+_PROVIDER = (os.environ.get("LLM_PROVIDER") or "deepseek").strip().lower()
+_base = (os.environ.get("LLM_BASE_URL") or "").strip().rstrip("/")
+_model = (os.environ.get("LLM_MODEL") or "").strip()
+if not _base:
+    _base = PRESETS.get(_PROVIDER, PRESETS["deepseek"])[0]
+if not _model:
+    _model = PRESETS.get(_PROVIDER, PRESETS["deepseek"])[1]
+API_BASE = _base
+API_URL = _base + "/chat/completions"
+MODEL = _model
+PROVIDER = _PROVIDER
 TIMEOUT = 180
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -43,7 +70,8 @@ _load_env()
 
 
 def api_key():
-    return os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    # LLM_API_KEY 优先（换服务商时用它），否则回落到 DEEPSEEK_API_KEY
+    return (os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or "").strip()
 
 
 def available():
@@ -74,7 +102,9 @@ def _opener():
 def chat(messages, temperature=0.4, max_tokens=3000, json_mode=True):
     key = api_key()
     if not key:
-        raise RuntimeError("未配置 DEEPSEEK_API_KEY，请在本项目根目录的 .env 里填写")
+        raise RuntimeError(
+            f"未配置 API Key（当前服务商：{PROVIDER}）。"
+            "请在项目根目录 .env 里填写 LLM_API_KEY 或 DEEPSEEK_API_KEY")
     body = {"model": MODEL, "messages": messages,
             "temperature": temperature, "max_tokens": max_tokens, "stream": False}
     if json_mode:
